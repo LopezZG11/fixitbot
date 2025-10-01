@@ -259,7 +259,7 @@ export default function Page() {
                 </dl>
 
                 {/* DIY inline solo para 'bajo' */}
-                {result.diy && (
+                {result?.diy && (
                   <div className="mt-4 rounded-lg bg-white/5 ring-1 ring-inset ring-white/10 p-3">
                     <div className="mb-2 text-sm opacity-75">Guía DIY sugerida</div>
                     <div className="font-medium">{result.diy.title}</div>

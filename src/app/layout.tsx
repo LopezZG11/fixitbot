@@ -1,3 +1,4 @@
+// src/app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
 import Link from "next/link";
@@ -19,7 +20,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es">
       <body className="min-h-svh bg-zinc-950 text-zinc-100">
-        {/* Navbar */}
         <header className="border-b border-white/10 backdrop-blur supports-[backdrop-filter]:bg-white/5">
           <div className="mx-auto max-w-4xl px-6 py-4 flex items-center justify-between">
             <Link href="/" className="text-lg font-semibold">
@@ -27,22 +27,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 FixItBot
               </span>
             </Link>
-            <nav className="flex items-center gap-5 text-sm">
-              <Link href="/diy" className="opacity-80 hover:opacity-100">DIY</Link>
-              <Link href="/talleres" className="opacity-80 hover:opacity-100">Talleres</Link>
-            </nav>
+            <div className="text-xs md:text-sm opacity-70">
+              Visión por computadora • Cotización rápida
+            </div>
           </div>
         </header>
 
-        {/* Page content */}
         {children}
 
-        {/* Footer */}
         <footer className="mx-auto max-w-4xl px-6 pb-8 pt-6 text-xs opacity-60">
-          © {new Date().getFullYear()} FixItBot • Demo educativa
+          © {new Date().getFullYear()} FixItBot • By MotorsWraps
         </footer>
 
-        {/* Analytics + Service Worker */}
         <Analytics />
         <SwClient />
       </body>
