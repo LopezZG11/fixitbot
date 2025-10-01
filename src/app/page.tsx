@@ -2,6 +2,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
 
+
 type Severity = "bajo" | "intermedio" | "avanzado" | string;
 
 type Box = {

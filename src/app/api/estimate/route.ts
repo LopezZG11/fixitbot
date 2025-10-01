@@ -1,6 +1,7 @@
-// src/app/api/estimate/route.ts (reemplaza completo)
+// src/app/api/estimate/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Buffer } from "node:buffer";
+
 export const runtime = "nodejs";
 
 type Severity = "bajo" | "intermedio" | "avanzado";
@@ -17,13 +18,14 @@ type ApiResult = {
   category: string;
   estimate: number;
   diy?: { title: string; videoUrl: string; steps: string[] };
-  boxes?: Box[];             // <-- nuevo (opcional)
-  areaPct?: number;          // <-- % aproximado de área dañada (0..1)
+  boxes?: Box[];      // opcional: si tu detector devuelve cajas
+  areaPct?: number;   // opcional: % de área dañada (0..1)
 };
 
 const ALLOWED = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX = 5 * 1024 * 1024;
 
+// Biblioteca de guías DIY (se muestra solo cuando severity === "bajo")
 const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: string[] }> = {
   rayon_ligero: {
     title: "Eliminar rayón ligero con pulido",
@@ -42,6 +44,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
 };
 
+// Normaliza categorías libres a nuestras llaves internas
 function normalizeCategory(raw: string): string {
   const k = raw.toLowerCase().replace(/\s+/g, "_");
   if (/(ray|pulid)/.test(k)) return "rayon_ligero";
@@ -50,25 +53,27 @@ function normalizeCategory(raw: string): string {
   return "rayon_ligero";
 }
 
+// Estimador con base por categoría + severidad + ajuste por área dañada
 function estimateCost(category: string, severity: Severity, areaPct = 0): number {
-  // base por categoría + multiplicadores por severidad + área dañada
   const base: Record<string, number> = { rayon_ligero: 1200, raspon_parachoques: 1800, abolladura_pequena: 2200 };
   const sevK: Record<Severity, number> = { bajo: 1, intermedio: 1.8, avanzado: 3.0 };
-  const areaK = 1 + Math.min(areaPct, 0.2) * 2; // hasta +40% si el daño es grande
+  const areaK = 1 + Math.min(areaPct, 0.2) * 2; // hasta +40% si el daño es grande (cap 20%)
   return Math.round((base[category] ?? 1500) * sevK[severity] * areaK);
 }
 
 function boxesAreaPct(boxes?: Box[]): number {
   if (!boxes?.length) return 0;
   const sum = boxes.reduce((acc, b) => acc + b.w * b.h, 0);
-  // capped: asume solapamientos
-  return Math.min(sum, 1);
+  return Math.min(sum, 1); // cap por solapamientos
 }
 
-/* ---- IA 1: OpenAI (clasificación rápida) ---- */
-async function inferWithOpenAI(file: File) {
+/* ================== IA #1: OpenAI (clasificación rápida) ================== */
+async function inferWithOpenAI(
+  file: File
+): Promise<{ severity?: Severity; category?: string; area?: string }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return {};
+
   const buf = Buffer.from(await file.arrayBuffer());
   const dataUrl = `data:${file.type};base64,${buf.toString("base64")}`;
 
@@ -93,11 +98,14 @@ async function inferWithOpenAI(file: File) {
       {
         role: "user",
         content: [
-          { type: "input_text", text:
+          {
+            type: "input_text",
+            text:
 `Clasifica el daño de la imagen en JSON con:
 - severity: "bajo" | "intermedio" | "avanzado"
 - category: etiqueta corta (ej. "rayon_ligero", "raspon_parachoques", "abolladura_pequena")
-- area: zona afectada (ej. "defensa/guardafango")` },
+- area: zona afectada (ej. "defensa/guardafango")`
+          },
           { type: "input_image", image_url: dataUrl }
         ]
       }
@@ -120,6 +128,7 @@ async function inferWithOpenAI(file: File) {
     if (typeof text === "string" && text.trim()) { try { parsed = JSON.parse(text); } catch {} }
   }
   if (!parsed) return {};
+
   const sev = String(parsed.severity ?? "").toLowerCase() as Severity;
   const allowed: Severity[] = ["bajo", "intermedio", "avanzado"];
   return {
@@ -129,14 +138,15 @@ async function inferWithOpenAI(file: File) {
   };
 }
 
-/* ---- IA 2: Detector opcional (cajas) ----
+/* ========== IA #2: Detector opcional (cajas) ==========
    Configura en Vercel: DETECTOR_URL (+ DETECTOR_API_KEY opcional)
-   Espera un JSON: { boxes: [{x,y,w,h,cls,score}], area?: "defensa/..." }
+   Espera JSON: { boxes: [{x,y,w,h,cls,score}], area?: "defensa/..." }
 */
 async function inferWithDetector(file: File): Promise<{ boxes?: Box[]; area?: string }> {
   const url = process.env.DETECTOR_URL;
   if (!url) return {};
   const key = process.env.DETECTOR_API_KEY;
+
   const buf = Buffer.from(await file.arrayBuffer());
   const b64 = buf.toString("base64");
 
@@ -146,8 +156,8 @@ async function inferWithDetector(file: File): Promise<{ boxes?: Box[]; area?: st
     body: JSON.stringify({ image_base64: b64 })
   });
   if (!resp.ok) throw new Error(`Detector ${resp.status}`);
+
   const data = await resp.json() as { boxes?: Box[]; area?: string };
-  // Sanitiza coordenadas a 0..1
   const boxes = (data.boxes ?? []).map(b => ({
     x: Math.max(0, Math.min(1, b.x)),
     y: Math.max(0, Math.min(1, b.y)),
@@ -159,7 +169,7 @@ async function inferWithDetector(file: File): Promise<{ boxes?: Box[]; area?: st
   return { boxes, area: data.area };
 }
 
-/* ---- Fallback demo ---- */
+/* ================== Fallback demo ================== */
 function fallbackHeuristic(file: File) {
   const size = file.size;
   const severity: Severity = size < 800_000 ? "bajo" : size < 1_600_000 ? "intermedio" : "avanzado";
@@ -168,7 +178,7 @@ function fallbackHeuristic(file: File) {
   return { severity, category, area };
 }
 
-/* ---- Handler ---- */
+/* ================== Handler ================== */
 export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
@@ -183,16 +193,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Imagen demasiado grande (máx. 5 MB)." }, { status: 413 });
     }
 
-    // 1) Clasificación (OpenAI)
+    // 1) Clasificación con OpenAI (si hay clave)
     let sev: Severity | undefined, cat: string | undefined, area: string | undefined;
-    try { const c = await inferWithOpenAI(file); sev = c.severity; cat = c.category; area = c.area; } catch {}
+    try {
+      const c = await inferWithOpenAI(file);
+      sev = c.severity; cat = c.category; area = c.area;
+    } catch {}
 
-    // 2) Detector (cajas)
+    // 2) Detector de daños (cajas) si lo configuraste
     let boxes: Box[] | undefined;
-    try { const d = await inferWithDetector(file); boxes = d.boxes; area = area ?? d.area; } catch {}
+    try {
+      const d = await inferWithDetector(file);
+      boxes = d.boxes;
+      area = area ?? d.area;
+    } catch {}
 
-    // 3) Fallback si falta algo
-    if (!sev || !cat || !area) { const f = fallbackHeuristic(file); sev ??= f.severity; cat ??= f.category; area ??= f.area; }
+    // 3) Fallback si faltan datos
+    if (!sev || !cat || !area) {
+      const f = fallbackHeuristic(file);
+      sev ??= f.severity; cat ??= f.category; area ??= f.area;
+    }
 
     const areaPct = boxesAreaPct(boxes);
     const estimate = estimateCost(cat!, sev!, areaPct);
