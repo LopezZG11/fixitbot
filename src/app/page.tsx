@@ -1,12 +1,14 @@
 "use client";
-
 import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
 
+type Severity = "bajo" | "intermedio" | "avanzado" | string;
 type EstimateResult = {
-  severity: "leve" | "medio" | "severo" | string;
+  severity: Severity;
   area: string;
+  category: string;
   estimate: number;
+  diy?: { title: string; videoUrl: string; steps: string[] };
 };
 
 const formatMXN = (n: number) =>
@@ -18,24 +20,15 @@ function isEstimateResult(v: unknown): v is EstimateResult {
   return (
     typeof o.severity === "string" &&
     typeof o.area === "string" &&
+    typeof o.category === "string" &&
     typeof o.estimate === "number"
   );
 }
 
-function severityColor(sev: EstimateResult["severity"]) {
-  if (sev === "severo") return "bg-red-500/15 text-red-400 ring-red-500/30";
-  if (sev === "medio") return "bg-amber-500/15 text-amber-400 ring-amber-500/30";
+function severityBadge(sev: Severity) {
+  if (sev === "avanzado") return "bg-red-500/15 text-red-400 ring-red-500/30";
+  if (sev === "intermedio") return "bg-amber-500/15 text-amber-400 ring-amber-500/30";
   return "bg-emerald-500/15 text-emerald-400 ring-emerald-500/30";
-}
-
-// Utilidad: File -> dataURL para incrustar imagen en el PDF
-async function fileToDataURL(file: File): Promise<string> {
-  const reader = new FileReader();
-  return new Promise((resolve, reject) => {
-    reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
-    reader.onload = () => resolve(String(reader.result));
-    reader.readAsDataURL(file);
-  });
 }
 
 export default function Page() {
@@ -55,16 +48,6 @@ export default function Page() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  const onDrop = (e: React.DragEvent<HTMLLabelElement>) => {
-    e.preventDefault();
-    const f = e.dataTransfer.files?.[0];
-    if (f && f.type.startsWith("image/")) {
-      setFile(f);
-      setMsg("");
-      setResult(null);
-    } else setMsg("Arrastra una imagen válida (jpg, png, etc.).");
-  };
-
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setMsg("");
@@ -74,14 +57,12 @@ export default function Page() {
       return;
     }
 
-    const form = new FormData();
-    form.append("image", file);
-
     try {
       setLoading(true);
+      const form = new FormData();
+      form.append("image", file);
       const res = await fetch("/api/estimate", { method: "POST", body: form });
       const data: unknown = await res.json();
-
       if (!res.ok) {
         const err = (data as { error?: unknown })?.error;
         setMsg(typeof err === "string" ? err : "Error en la estimación");
@@ -103,57 +84,22 @@ export default function Page() {
     setMsg("");
   };
 
-  // B1) Abrir Google Maps con talleres cercanos (usa geolocalización si está disponible)
+  // Talleres cercanos (se mantiene)
   const openNearbyWorkshops = () => {
     const query = encodeURIComponent("taller de hojalatería y pintura");
     const fallback = () =>
       window.open(`https://www.google.com/maps/search/${query}`, "_blank");
-
     if (!navigator.geolocation) return fallback();
-
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        const url = `https://www.google.com/maps/search/${query}/@${coords.latitude},${coords.longitude},14z`;
-        window.open(url, "_blank");
+        window.open(
+          `https://www.google.com/maps/search/${query}/@${coords.latitude},${coords.longitude},14z`,
+          "_blank"
+        );
       },
       fallback,
       { enableHighAccuracy: true, timeout: 5000 }
     );
-  };
-
-  // A1) Generar PDF con jsPDF
-  const downloadPDF = async () => {
-    if (!file || !result) return;
-    const { jsPDF } = await import("jspdf");
-    const doc = new jsPDF({ unit: "pt", format: "a4" });
-
-    // Encabezado
-    doc.setFontSize(18);
-    doc.text("FixItBot — Reporte de Evaluación", 40, 50);
-    doc.setFontSize(11);
-    doc.text(`Fecha: ${new Date().toLocaleString("es-MX")}`, 40, 70);
-
-    // Datos
-    doc.setFontSize(12);
-    doc.text(`Severidad: ${result.severity}`, 40, 110);
-    doc.text(`Zona estimada: ${result.area}`, 40, 130);
-    doc.text(`Costo aproximado: ${formatMXN(result.estimate)}`, 40, 150);
-
-    // Imagen (siempre en PNG, jsPDF acepta dataURL)
-    const dataUrl = await fileToDataURL(file);
-    const imgW = 500;
-    const imgH = 300;
-    doc.addImage(dataUrl, "PNG", 40, 180, imgW, imgH);
-
-    // Nota
-    doc.setFontSize(10);
-    doc.text(
-      "*Estimación aproximada con fines académicos.",
-      40,
-      180 + imgH + 24
-    );
-
-    doc.save(`fixitbot-reporte-${Date.now()}.pdf`);
   };
 
   return (
@@ -185,7 +131,17 @@ export default function Page() {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "copy";
               }}
-              onDrop={onDrop}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = e.dataTransfer.files?.[0];
+                if (f && f.type.startsWith("image/")) {
+                  setFile(f);
+                  setMsg("");
+                  setResult(null);
+                } else {
+                  setMsg("Arrastra una imagen válida (jpg, png, etc.).");
+                }
+              }}
               className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-white/15 bg-white/5 p-6 text-center transition hover:border-white/25 hover:bg-white/10"
             >
               <input
@@ -234,11 +190,7 @@ export default function Page() {
               </button>
 
               {msg && (
-                <span
-                  role="status"
-                  aria-live="polite"
-                  className="ml-auto text-xs text-red-400"
-                >
+                <span role="status" aria-live="polite" className="ml-auto text-xs text-red-400">
                   {msg}
                 </span>
               )}
@@ -246,7 +198,7 @@ export default function Page() {
           </form>
         </section>
 
-        {/* Previsualización y resultado */}
+        {/* Previsualización + Resultado */}
         <section className="rounded-2xl border border-white/10 bg-white/5 shadow-xl overflow-hidden">
           <div className="p-5 border-b border-white/10">
             <h2 className="font-medium">2) Previsualización</h2>
@@ -285,9 +237,10 @@ export default function Page() {
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <h3 className="font-semibold">Resultado</h3>
                   <span
-                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${severityColor(
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${severityBadge(
                       result.severity
                     )}`}
+                    title={`Severidad: ${result.severity}`}
                   >
                     <span className="h-2 w-2 rounded-full bg-current opacity-70" />
                     {result.severity}
@@ -305,18 +258,32 @@ export default function Page() {
                   </div>
                 </dl>
 
+                {/* DIY inline solo para 'bajo' */}
+                {result.diy && (
+                  <div className="mt-4 rounded-lg bg-white/5 ring-1 ring-inset ring-white/10 p-3">
+                    <div className="mb-2 text-sm opacity-75">Guía DIY sugerida</div>
+                    <div className="font-medium">{result.diy.title}</div>
+                    <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg border border-white/10">
+                      <iframe
+                        src={result.diy.videoUrl.replace("watch?v=", "embed/")}
+                        className="h-full w-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        title="DIY video"
+                      />
+                    </div>
+                    <ol className="mt-3 list-decimal pl-5 text-sm opacity-90 space-y-1">
+                      {result.diy.steps.map((s, i) => <li key={i}>{s}</li>)}
+                    </ol>
+                  </div>
+                )}
+
                 <div className="mt-4 flex flex-wrap gap-3">
-                  <button
-                    onClick={downloadPDF}
-                    className="rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white ring-1 ring-violet-400/30 hover:bg-violet-400"
-                  >
-                    Descargar reporte (PDF)
-                  </button>
                   <button
                     onClick={openNearbyWorkshops}
                     className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-white ring-1 ring-emerald-400/30 hover:bg-emerald-400"
                   >
-                    Talleres cercanos
+                    Ver talleres cercanos
                   </button>
                 </div>
 
@@ -328,10 +295,6 @@ export default function Page() {
           </div>
         </section>
       </main>
-
-      <footer className="mx-auto max-w-4xl px-6 pb-8 pt-2 text-xs opacity-60">
-        © {new Date().getFullYear()} FixItBot • Demo educativa
-      </footer>
     </div>
   );
 }
