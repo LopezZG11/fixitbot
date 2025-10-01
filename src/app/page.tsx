@@ -3,12 +3,25 @@ import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
 
 type Severity = "bajo" | "intermedio" | "avanzado" | string;
+
+type Box = {
+  // Coordenadas normalizadas 0..1 (relativas al ancho/alto de la imagen)
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  cls: string;
+  score?: number;
+};
+
 type EstimateResult = {
   severity: Severity;
   area: string;
   category: string;
   estimate: number;
   diy?: { title: string; videoUrl: string; steps: string[] };
+  boxes?: Box[];     // opcional: si el backend devuelve detecciones
+  areaPct?: number;  // opcional: % de área dañada (0..1)
 };
 
 const formatMXN = (n: number) =>
@@ -56,13 +69,13 @@ export default function Page() {
       setMsg("Primero selecciona o arrastra una imagen.");
       return;
     }
-
     try {
       setLoading(true);
       const form = new FormData();
       form.append("image", file);
       const res = await fetch("/api/estimate", { method: "POST", body: form });
       const data: unknown = await res.json();
+
       if (!res.ok) {
         const err = (data as { error?: unknown })?.error;
         setMsg(typeof err === "string" ? err : "Error en la estimación");
@@ -84,7 +97,6 @@ export default function Page() {
     setMsg("");
   };
 
-  // Talleres cercanos (se mantiene)
   const openNearbyWorkshops = () => {
     const query = encodeURIComponent("taller de hojalatería y pintura");
     const fallback = () =>
@@ -103,29 +115,15 @@ export default function Page() {
   };
 
   return (
-    <div className="min-h-svh bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-950 text-zinc-100">
-      <header className="border-b border-white/10 backdrop-blur supports-[backdrop-filter]:bg-white/5">
-        <div className="mx-auto max-w-4xl px-6 py-4 flex items-center justify-between">
-          <h1 className="text-xl md:text-2xl font-semibold">
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-sky-400 to-emerald-400">
-              FixItBot
-            </span>{" "}
-            — MVP
-          </h1>
-          <div className="text-xs md:text-sm opacity-70">
-            Visión por computadora • Cotización rápida
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-4xl px-6 py-8 grid lg:grid-cols-2 gap-6">
-        {/* Uploader */}
-        <section className="rounded-2xl border border-white/10 bg-white/5 shadow-xl overflow-hidden">
+    <main className="mx-auto max-w-5xl px-6 py-8">
+      <div className="grid gap-6 lg:grid-cols-2 items-stretch">
+        {/* Tarjeta: Uploader */}
+        <section className="rounded-2xl border border-white/10 bg-white/5 shadow-xl overflow-hidden flex flex-col h-full">
           <div className="p-5 border-b border-white/10">
             <h2 className="font-medium">1) Sube o arrastra una imagen</h2>
           </div>
 
-          <form onSubmit={onSubmit} className="p-5 space-y-5">
+          <form onSubmit={onSubmit} className="p-5 flex flex-col gap-5 flex-1">
             <label
               onDragOver={(e) => {
                 e.preventDefault();
@@ -142,7 +140,7 @@ export default function Page() {
                   setMsg("Arrastra una imagen válida (jpg, png, etc.).");
                 }
               }}
-              className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-white/15 bg-white/5 p-6 text-center transition hover:border-white/25 hover:bg-white/10"
+              className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-white/15 bg-white/5 p-6 text-center transition hover:border-white/25 hover:bg-white/10 h-56"
             >
               <input
                 type="file"
@@ -172,7 +170,7 @@ export default function Page() {
               )}
             </label>
 
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="mt-auto flex flex-wrap items-center gap-3">
               <button
                 type="submit"
                 className="inline-flex items-center justify-center rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white shadow ring-1 ring-inset ring-indigo-400/30 transition hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -190,7 +188,11 @@ export default function Page() {
               </button>
 
               {msg && (
-                <span role="status" aria-live="polite" className="ml-auto text-xs text-red-400">
+                <span
+                  role="status"
+                  aria-live="polite"
+                  className="ml-auto text-xs text-red-400"
+                >
                   {msg}
                 </span>
               )}
@@ -198,15 +200,15 @@ export default function Page() {
           </form>
         </section>
 
-        {/* Previsualización + Resultado */}
-        <section className="rounded-2xl border border-white/10 bg-white/5 shadow-xl overflow-hidden">
+        {/* Tarjeta: Previsualización + Resultado */}
+        <section className="rounded-2xl border border-white/10 bg-white/5 shadow-xl overflow-hidden flex flex-col h-full">
           <div className="p-5 border-b border-white/10">
             <h2 className="font-medium">2) Previsualización</h2>
           </div>
 
-          <div className="p-5">
+          <div className="p-5 flex flex-col gap-5 flex-1">
             {!previewUrl && (
-              <div className="h-72 w-full rounded-xl border border-white/10 bg-gradient-to-br from-zinc-800 to-zinc-900/70 grid place-items-center text-sm opacity-70">
+              <div className="h-56 w-full rounded-xl border border-white/10 bg-gradient-to-br from-zinc-800 to-zinc-900/70 grid place-items-center text-sm opacity-70">
                 Sin imagen seleccionada
               </div>
             )}
@@ -222,18 +224,34 @@ export default function Page() {
                   className="h-auto w-full object-cover"
                   priority
                 />
+
+                {/* Overlay de cajas si el backend envía detecciones */}
+                {result?.boxes?.map((b, i) => (
+                  <div
+                    key={i}
+                    className="absolute border-2 border-emerald-400/80 rounded"
+                    style={{
+                      left: `${b.x * 100}%`,
+                      top: `${b.y * 100}%`,
+                      width: `${b.w * 100}%`,
+                      height: `${b.h * 100}%`,
+                      boxShadow: "0 0 0 1px rgba(16,185,129,.5) inset",
+                    }}
+                    title={`${b.cls}${b.score ? ` (${(b.score * 100).toFixed(0)}%)` : ""}`}
+                  />
+                ))}
               </div>
             )}
 
             {loading && (
-              <div className="mt-4 flex items-center gap-3 text-sm">
+              <div className="flex items-center gap-3 text-sm">
                 <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                 Procesando imagen…
               </div>
             )}
 
             {result && !loading && (
-              <div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4">
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <h3 className="font-semibold">Resultado</h3>
                   <span
@@ -273,7 +291,9 @@ export default function Page() {
                       />
                     </div>
                     <ol className="mt-3 list-decimal pl-5 text-sm opacity-90 space-y-1">
-                      {result.diy.steps.map((s, i) => <li key={i}>{s}</li>)}
+                      {result.diy.steps.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
                     </ol>
                   </div>
                 )}
@@ -288,13 +308,13 @@ export default function Page() {
                 </div>
 
                 <p className="mt-3 text-xs opacity-70">
-                  *Estimación aproximada con fines académicos.
+                  *Estimación preliminar con fines informativos.
                 </p>
               </div>
             )}
           </div>
         </section>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }

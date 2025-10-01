@@ -1,41 +1,62 @@
 // src/app/layout.tsx
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import Link from "next/link";
+import Image from "next/image";
 import { Analytics } from "@vercel/analytics/react";
-import SwClient from "./components/sw-registrar";
+import SwClient from "./components/sw-registrar"; // ajusta si tu ruta es distinta
 
 export const metadata: Metadata = {
   title: "FixItBot",
   description: "Análisis de daños, cotización aproximada y guías DIY",
   manifest: "/manifest.webmanifest",
-  themeColor: "#0b0f19",
   icons: [
     { rel: "icon", url: "/icon-192.png" },
     { rel: "apple-touch-icon", url: "/icon-192.png" },
   ],
+};
+export const viewport: Viewport = {
+  // una sola
+  themeColor: "#0b0f19",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es">
       <body className="min-h-svh bg-zinc-950 text-zinc-100">
-        <header className="border-b border-white/10 backdrop-blur supports-[backdrop-filter]:bg-white/5">
-          <div className="mx-auto max-w-4xl px-6 py-4 flex items-center justify-between">
-            <Link href="/" className="text-lg font-semibold">
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-sky-400 to-emerald-400">
-                FixItBot
-              </span>
-            </Link>
-            <div className="text-xs md:text-sm opacity-70">
-              Visión por computadora • Cotización rápida
+        {/* Header sin leyenda */}
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/70 backdrop-blur">
+          <div className="mx-auto max-w-5xl px-6">
+            <div className="flex items-center justify-between py-3">
+              {/* Izquierda: MotorsWraps (logo 1cm x 1cm) */}
+              <div className="flex items-center gap-3">
+                <Image
+                  src="/LogoMW.png"
+                  alt="MotorsWraps"
+                  width={40}
+                  height={40}
+                  priority
+                  style={{ width: "3cm", height: "3cm" }}
+                  className="rounded-md object-contain"
+                />
+                <span className="text-base md:text-lg font-semibold">MotorsWraps</span>
+              </div>
+
+              {/* Derecha: FixItBot (más legible) */}
+              <Image
+                src="/LogoFixitbot.png"
+                alt="FixItBot"
+                width={200}
+                height={60}
+                priority
+                className="h-22 w-auto"  // ~48px de alto; ajusta a h-14 si lo quieres aún mayor
+              />
             </div>
           </div>
         </header>
 
         {children}
 
-        <footer className="mx-auto max-w-4xl px-6 pb-8 pt-6 text-xs opacity-60">
+        <footer className="mx-auto max-w-2xl px-6 pb-8 pt-6 text-xs opacity-60">
           © {new Date().getFullYear()} FixItBot • By MotorsWraps
         </footer>
 
