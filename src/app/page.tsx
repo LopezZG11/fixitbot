@@ -1,18 +1,13 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
-
+import { track } from "@vercel/analytics";          // Analytics (eventos)
+import * as Sentry from "@sentry/nextjs";           // Sentry (errores)
 
 type Severity = "bajo" | "intermedio" | "avanzado" | string;
 
 type Box = {
-  // Coordenadas normalizadas 0..1 (relativas al ancho/alto de la imagen)
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  cls: string;
-  score?: number;
+  x: number; y: number; w: number; h: number; cls: string; score?: number;
 };
 
 type EstimateResult = {
@@ -21,8 +16,8 @@ type EstimateResult = {
   category: string;
   estimate: number;
   diy?: { title: string; videoUrl: string; steps: string[] };
-  boxes?: Box[];     // opcional: si el backend devuelve detecciones
-  areaPct?: number;  // opcional: % de área dañada (0..1)
+  boxes?: Box[];
+  areaPct?: number;
 };
 
 const formatMXN = (n: number) =>
@@ -53,10 +48,7 @@ export default function Page() {
   const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
-      return;
-    }
+    if (!file) { setPreviewUrl(null); return; }
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
@@ -64,44 +56,50 @@ export default function Page() {
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setMsg("");
-    setResult(null);
-    if (!file) {
-      setMsg("Primero selecciona o arrastra una imagen.");
-      return;
-    }
+    setMsg(""); setResult(null);
+    if (!file) { setMsg("Primero selecciona o arrastra una imagen."); return; }
+
     try {
       setLoading(true);
+      track("analyze_click"); // Analytics: inicio de análisis
+
       const form = new FormData();
       form.append("image", file);
       const res = await fetch("/api/estimate", { method: "POST", body: form });
       const data: unknown = await res.json();
 
       if (!res.ok) {
-        const err = (data as { error?: unknown })?.error;
-        setMsg(typeof err === "string" ? err : "Error en la estimación");
+        const errMsg = (data as { error?: unknown })?.error;
+        setMsg(typeof errMsg === "string" ? errMsg : "Error en la estimación");
+        track("analyze_error", { status: res.status }); // Analytics: error
         return;
       }
-      if (isEstimateResult(data)) setResult(data);
-      else setMsg("Respuesta inesperada del servidor.");
-    } catch {
+
+      if (isEstimateResult(data)) {
+        setResult(data);
+        track("analyze_result", { severity: data.severity, estimate: data.estimate }); // Analytics: éxito
+      } else {
+        setMsg("Respuesta inesperada del servidor.");
+        track("analyze_error", { reason: "unexpected_response" });
+      }
+    } catch (err) {
+      Sentry.captureException(err); // Sentry: registra excepción
       setMsg("No se pudo conectar con la API.");
+      track("analyze_error", { reason: "network" });
     } finally {
       setLoading(false);
     }
   };
 
   const reset = () => {
-    setFile(null);
-    setPreviewUrl(null);
-    setResult(null);
-    setMsg("");
+    setFile(null); setPreviewUrl(null); setResult(null); setMsg("");
+    track("reset_click");
   };
 
   const openNearbyWorkshops = () => {
+    track("booking_click", { channel: "maps" }); // Analytics: clic agendar (Maps)
     const query = encodeURIComponent("taller de hojalatería y pintura");
-    const fallback = () =>
-      window.open(`https://www.google.com/maps/search/${query}`, "_blank");
+    const fallback = () => window.open(`https://www.google.com/maps/search/${query}`, "_blank");
     if (!navigator.geolocation) return fallback();
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
@@ -116,6 +114,20 @@ export default function Page() {
   };
 
   return (
+    <div className="min-h-svh bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-950 text-zinc-100">
+      <header className="border-b border-white/10 backdrop-blur supports-[backdrop-filter]:bg-white/5">
+        <div className="mx-auto max-w-4xl px-6 py-4 flex items-center justify-between">
+          <h1 className="text-xl md:text-2xl font-semibold">
+            <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-sky-400 to-emerald-400">
+              FixItBot
+            </span>{" "}
+            — MVP
+          </h1>
+          <div className="text-xs md:text-sm opacity-70">
+            Visión por computadora • Cotización rápida
+          </div>
+        </div>
+      </header>
     <main className="mx-auto max-w-5xl px-6 py-8">
       <div className="grid gap-6 lg:grid-cols-2 items-stretch">
         {/* Tarjeta: Uploader */}
@@ -126,20 +138,12 @@ export default function Page() {
 
           <form onSubmit={onSubmit} className="p-5 flex flex-col gap-5 flex-1">
             <label
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-              }}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
               onDrop={(e) => {
                 e.preventDefault();
                 const f = e.dataTransfer.files?.[0];
-                if (f && f.type.startsWith("image/")) {
-                  setFile(f);
-                  setMsg("");
-                  setResult(null);
-                } else {
-                  setMsg("Arrastra una imagen válida (jpg, png, etc.).");
-                }
+                if (f && f.type.startsWith("image/")) { setFile(f); setMsg(""); setResult(null); }
+                else setMsg("Arrastra una imagen válida (jpg, png, etc.).");
               }}
               className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-white/15 bg-white/5 p-6 text-center transition hover:border-white/25 hover:bg-white/10 h-56"
             >
@@ -148,27 +152,17 @@ export default function Page() {
                 accept="image/*"
                 onChange={(e) => {
                   const f = e.target.files?.[0] ?? null;
-                  if (f && !f.type.startsWith("image/")) {
-                    setMsg("Selecciona una imagen válida.");
-                    return;
-                  }
-                  setFile(f);
-                  setMsg("");
-                  setResult(null);
+                  if (f && !f.type.startsWith("image/")) { setMsg("Selecciona una imagen válida."); return; }
+                  setFile(f); setMsg(""); setResult(null);
                 }}
                 className="sr-only"
               />
               <div className="text-4xl leading-none">🖼️</div>
               <div className="text-sm">
                 <b>Arrastra y suelta</b> una foto de la carrocería
-                <br />
-                <span className="opacity-70">o haz clic para seleccionar</span>
+                <br /><span className="opacity-70">o haz clic para seleccionar</span>
               </div>
-              {file && (
-                <div className="text-xs opacity-70">
-                  Seleccionado: <b>{file.name}</b>
-                </div>
-              )}
+              {file && <div className="text-xs opacity-70">Seleccionado: <b>{file.name}</b></div>}
             </label>
 
             <div className="mt-auto flex flex-wrap items-center gap-3">
@@ -189,11 +183,7 @@ export default function Page() {
               </button>
 
               {msg && (
-                <span
-                  role="status"
-                  aria-live="polite"
-                  className="ml-auto text-xs text-red-400"
-                >
+                <span role="status" aria-live="polite" className="ml-auto text-xs text-red-400">
                   {msg}
                 </span>
               )}
@@ -256,9 +246,7 @@ export default function Page() {
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <h3 className="font-semibold">Resultado</h3>
                   <span
-                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${severityBadge(
-                      result.severity
-                    )}`}
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ${severityBadge(result.severity)}`}
                     title={`Severidad: ${result.severity}`}
                   >
                     <span className="h-2 w-2 rounded-full bg-current opacity-70" />
@@ -292,9 +280,7 @@ export default function Page() {
                       />
                     </div>
                     <ol className="mt-3 list-decimal pl-5 text-sm opacity-90 space-y-1">
-                      {result.diy.steps.map((s, i) => (
-                        <li key={i}>{s}</li>
-                      ))}
+                      {result.diy.steps.map((s, i) => <li key={i}>{s}</li>)}
                     </ol>
                   </div>
                 )}
@@ -317,5 +303,6 @@ export default function Page() {
         </section>
       </div>
     </main>
+  </div>
   );
 }

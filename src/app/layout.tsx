@@ -23,32 +23,32 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es">
       <body className="min-h-svh bg-zinc-950 text-zinc-100">
-        {/* Header sin leyenda */}
+        {/* Header */}
         <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/70 backdrop-blur">
           <div className="mx-auto max-w-5xl px-6">
-            <div className="flex items-center justify-between py-3">
-              {/* Izquierda: MotorsWraps (logo 1cm x 1cm) */}
-              <div className="flex items-center gap-3">
+            <div className="flex h-16 items-center justify-between"> 
+              {/* Izquierda: MotorsWraps */}
+              <div className="flex h-full items-center gap-3">
                 <Image
                   src="/LogoMW.png"
                   alt="MotorsWraps"
                   width={40}
-                  height={40}
+                  height={60}
                   priority
-                  style={{ width: "3cm", height: "3cm" }}
-                  className="rounded-md object-contain"
+                  className="h-full w-auto rounded-md object-contain"
                 />
                 <span className="text-base md:text-lg font-semibold">MotorsWraps</span>
               </div>
 
-              {/* Derecha: FixItBot (más legible) */}
+              {/* Derecha: FixItBot */}
               <Image
                 src="/LogoFixitbot.png"
                 alt="FixItBot"
                 width={200}
                 height={60}
                 priority
-                className="h-22 w-auto"  // ~48px de alto; ajusta a h-14 si lo quieres aún mayor
+
+                className="h-12 w-auto"
               />
             </div>
           </div>
