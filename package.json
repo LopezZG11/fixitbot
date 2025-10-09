@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@react-pdf/renderer": "^4.3.1",
     "@sentry/nextjs": "^10.17.0",
     "@upstash/ratelimit": "^2.0.6",
     "@upstash/redis": "^1.35.4",
@@ -16,6 +17,7 @@
     "jspdf": "^3.0.3",
     "next": "15.5.4",
     "react": "19.1.0",
+    "react-chatbot-kit": "^2.2.2",
     "react-dom": "19.1.0"
   },
   "devDependencies": {

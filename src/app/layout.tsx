@@ -3,7 +3,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Image from "next/image";
 import { Analytics } from "@vercel/analytics/react";
-import SwClient from "./components/sw-registrar"; // ajusta si tu ruta es distinta
+import SwClient from "./components/sw-registrar";
+import ChatbotWidget from "./components/ChatbotWidget"; // ⬅️ Chatbot
 
 export const metadata: Metadata = {
   title: "FixItBot",
@@ -14,8 +15,8 @@ export const metadata: Metadata = {
     { rel: "apple-touch-icon", url: "/icon-192.png" },
   ],
 };
+
 export const viewport: Viewport = {
-  // una sola
   themeColor: "#0b0f19",
 };
 
@@ -26,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Header */}
         <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/70 backdrop-blur">
           <div className="mx-auto max-w-5xl px-6">
-            <div className="flex h-16 items-center justify-between"> 
+            <div className="flex h-16 items-center justify-between">
               {/* Izquierda: MotorsWraps */}
               <div className="flex h-full items-center gap-3">
                 <Image
@@ -47,7 +48,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 width={200}
                 height={60}
                 priority
-
                 className="h-12 w-auto"
               />
             </div>
@@ -60,8 +60,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           © {new Date().getFullYear()} FixItBot • By MotorsWraps
         </footer>
 
+        {/* Widgets cliente */}
         <Analytics />
         <SwClient />
+        <ChatbotWidget /> {/* ⬅️ Bot flotante en la esquina */}
       </body>
     </html>
   );
