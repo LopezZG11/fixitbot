@@ -499,7 +499,10 @@ function calculateEstimate(boxes: Box[], fallbackFile?: File): ApiResult {
  * ========================================================================
  */
 async function callDetector(file: File): Promise<DetectorOut> {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'; 
+    const baseUrl = process.env.VERCEL_URL 
+        ? `https://${process.env.VERCEL_URL}` 
+        : 'http://localhost:3000'; 
+
   const detApiUrl = new URL('/api/detector', baseUrl);
   const b64 = Buffer.from(await file.arrayBuffer()).toString("base64");
   const r = await fetch(detApiUrl, {
