@@ -30,7 +30,7 @@ function getJWT(): JWT {
 function buildSessionPath(sessionId: string): string {
   // CORRECCIÓN: Usamos las variables que definiste en Vercel
   const project = process.env.DIALOGFLOW_PROJECT_ID!;
-  const location = process.env.DIALOGFLOW_LOCATION_ID || "global";
+  const location = process.env.DIALOGFLOW_LOCATION_ID || "us-central1";
   const agent = process.env.DIALOGFLOW_AGENT_ID!;
   return `projects/${project}/locations/${location}/agents/${agent}/sessions/${sessionId}`;
 }
