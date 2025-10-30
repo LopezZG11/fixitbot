@@ -17,7 +17,8 @@ const SCOPES = ["https://www.googleapis.com/auth/cloud-platform"];
 
 function getJWT(): JWT {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || "";
-  const privateKey = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+  // Ya no se necesita el .replace() porque tu clave en Vercel está en el formato correcto
+  const privateKey = process.env.GOOGLE_PRIVATE_KEY || "";
 
   return new JWT({
     email: clientEmail,
@@ -27,6 +28,7 @@ function getJWT(): JWT {
 }
 
 function buildSessionPath(sessionId: string): string {
+  // CORRECCIÓN: Usamos las variables que definiste en Vercel
   const project = process.env.DIALOGFLOW_PROJECT_ID!;
   const location = process.env.DIALOGFLOW_LOCATION_ID || "global";
   const agent = process.env.DIALOGFLOW_AGENT_ID!;
@@ -45,9 +47,11 @@ export async function POST(req: NextRequest) {
     const sessionPath = buildSessionPath(body.sessionId);
 
     const baseUrl = `https://dialogflow.googleapis.com/v3/${sessionPath}:detectIntent`;
+    
+    // CORRECCIÓN: Usamos las variables correctas aquí también
     const url =
       environmentId
-        ? `${baseUrl}?environment=projects/${process.env.GOOGLE_PROJECT_ID}/locations/${process.env.DIALOGFLOW_CX_LOCATION || "global"}/agents/${process.env.DIALOGFLOW_CX_AGENT_ID}/environments/${environmentId}`
+        ? `${baseUrl}?environment=projects/${process.env.DIALOGFLOW_PROJECT_ID}/locations/${process.env.DIALOGFLOW_LOCATION_ID || "global"}/agents/${process.env.DIALOGFLOW_AGENT_ID}/environments/${environmentId}`
         : baseUrl;
 
     const jwt = getJWT();
@@ -71,6 +75,7 @@ export async function POST(req: NextRequest) {
 
     if (!resp.ok) {
       const t = await resp.text();
+      // Devolvemos el error de Dialogflow para más claridad
       return NextResponse.json({ error: `Dialogflow ${resp.status}: ${t}` }, { status: 502 });
     }
 
