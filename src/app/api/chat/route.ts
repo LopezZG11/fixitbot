@@ -17,7 +17,6 @@ const SCOPES = ["https://www.googleapis.com/auth/cloud-platform"];
 
 function getJWT(): JWT {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || "";
-  // Ya no se necesita el .replace() porque tu clave en Vercel está en el formato correcto
   const privateKey = process.env.GOOGLE_PRIVATE_KEY || "";
 
   return new JWT({
@@ -28,9 +27,8 @@ function getJWT(): JWT {
 }
 
 function buildSessionPath(sessionId: string): string {
-  // CORRECCIÓN: Usamos las variables que definiste en Vercel
   const project = process.env.DIALOGFLOW_PROJECT_ID!;
-  const location = process.env.DIALOGFLOW_LOCATION_ID || "us-central1";
+  const location = process.env.DIALOGFLOW_LOCATION_ID || "global";
   const agent = process.env.DIALOGFLOW_AGENT_ID!;
   return `projects/${project}/locations/${location}/agents/${agent}/sessions/${sessionId}`;
 }
@@ -46,12 +44,16 @@ export async function POST(req: NextRequest) {
     const environmentId = process.env.DIALOGFLOW_CX_ENVIRONMENT; // opcional
     const sessionPath = buildSessionPath(body.sessionId);
 
-    const baseUrl = `https://dialogflow.googleapis.com/v3/${sessionPath}:detectIntent`;
+    // --- CORRECCIÓN DE ENDPOINT REGIONAL ---
+    // Leemos la ubicación de las variables de entorno
+    const location = process.env.DIALOGFLOW_LOCATION_ID || "global";
+
+    // Construimos la URL base usando el endpoint regional (ej. us-central1-dialogflow.googleapis.com)
+    const baseUrl = `https://${location}-dialogflow.googleapis.com/v3/${sessionPath}:detectIntent`;
     
-    // CORRECCIÓN: Usamos las variables correctas aquí también
     const url =
       environmentId
-        ? `${baseUrl}?environment=projects/${process.env.DIALOGFLOW_PROJECT_ID}/locations/${process.env.DIALOGFLOW_LOCATION_ID || "global"}/agents/${process.env.DIALOGFLOW_AGENT_ID}/environments/${environmentId}`
+        ? `${baseUrl}?environment=projects/${process.env.DIALOGFLOW_PROJECT_ID}/locations/${location}/agents/${process.env.DIALOGFLOW_AGENT_ID}/environments/${environmentId}`
         : baseUrl;
 
     const jwt = getJWT();
@@ -75,7 +77,7 @@ export async function POST(req: NextRequest) {
 
     if (!resp.ok) {
       const t = await resp.text();
-      // Devolvemos el error de Dialogflow para más claridad
+      // Este es el error 502 que estabas viendo
       return NextResponse.json({ error: `Dialogflow ${resp.status}: ${t}` }, { status: 502 });
     }
 
