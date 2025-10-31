@@ -1,6 +1,6 @@
 // src/app/api/chat/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { JWT } from "google-auth-library";
+import { SessionsClient } from "@google-cloud/dialogflow";
 
 export const runtime = "nodejs";
 
@@ -9,90 +9,68 @@ type ChatRequest = {
   text: string;
 };
 
-type DFText = { text?: { text?: string[] } };
-type DFQueryResult = { responseMessages?: DFText[] };
-type DFDetectIntentResponse = { queryResult?: DFQueryResult };
+// --- PASO 1: Configurar el Cliente ---
+// Estas son las 3 variables que necesitas en Vercel
+const projectId = process.env.DIALOGFLOW_PROJECT_ID || "";
+const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || "";
+// Esto arregla la clave privada que viene de Vercel
+const privateKey = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
 
-const SCOPES = ["https://www.googleapis.com/auth/cloud-platform"];
+const credentials = {
+  client_email: clientEmail,
+  private_key: privateKey,
+};
 
-function getJWT(): JWT {
-  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL || "";
-  const privateKey = process.env.GOOGLE_PRIVATE_KEY || "";
+// Creamos el cliente de Dialogflow ES (no CX)
+const sessionClient = new SessionsClient({
+  projectId,
+  credentials,
+});
 
-  return new JWT({
-    email: clientEmail,
-    key: privateKey,
-    scopes: SCOPES,
-  });
-}
-
-function buildSessionPath(sessionId: string): string {
-  const project = process.env.DIALOGFLOW_PROJECT_ID!;
-  const location = process.env.DIALOGFLOW_LOCATION_ID || "global";
-  const agent = process.env.DIALOGFLOW_AGENT_ID!;
-  return `projects/${project}/locations/${location}/agents/${agent}/sessions/${sessionId}`;
-}
-
+// --- PASO 2: Función Principal (POST) ---
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as ChatRequest;
-    if (!body?.text || !body?.sessionId) {
+    const { sessionId, text } = body;
+
+    if (!sessionId || !text) {
       return NextResponse.json({ error: "sessionId y text son requeridos." }, { status: 400 });
     }
 
-    const languageCode = process.env.DIALOGFLOW_CX_LANGUAGE || "es";
-    const environmentId = process.env.DIALOGFLOW_CX_ENVIRONMENT; // opcional
-    const sessionPath = buildSessionPath(body.sessionId);
+    // Definimos la ruta de la sesión para Dialogflow ES (es más simple que CX)
+    const sessionPath = sessionClient.projectAgentSessionPath(
+      projectId,
+      sessionId
+    );
 
-    // --- CORRECCIÓN DE ENDPOINT REGIONAL ---
-    // Leemos la ubicación de las variables de entorno
-    const location = process.env.DIALOGFLOW_LOCATION_ID || "global";
-
-    // Construimos la URL base usando el endpoint regional (ej. us-central1-dialogflow.googleapis.com)
-    const baseUrl = `https://${location}-dialogflow.googleapis.com/v3/${sessionPath}:detectIntent`;
-    
-    const url =
-      environmentId
-        ? `${baseUrl}?environment=projects/${process.env.DIALOGFLOW_PROJECT_ID}/locations/${location}/agents/${process.env.DIALOGFLOW_AGENT_ID}/environments/${environmentId}`
-        : baseUrl;
-
-    const jwt = getJWT();
-    const token = await jwt.getAccessToken();
-
-    const payload = {
+    // Creamos la solicitud para enviar a Dialogflow
+    const request = {
+      session: sessionPath,
       queryInput: {
-        text: { text: body.text },
-        languageCode,
+        text: {
+          text: text,
+          languageCode: "es", // Idioma "quemado" en el código
+        },
       },
     };
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token?.token || token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    // Enviamos el texto del usuario a Dialogflow ES
+    const [response] = await sessionClient.detectIntent(request);
+    const result = response.queryResult;
 
-    if (!resp.ok) {
-      const t = await resp.text();
-      // Este es el error 502 que estabas viendo
-      return NextResponse.json({ error: `Dialogflow ${resp.status}: ${t}` }, { status: 502 });
+    // Devolvemos la respuesta del bot
+    if (result && result.fulfillmentText) {
+      const replies = [result.fulfillmentText];
+      return NextResponse.json({ replies });
+    } else {
+      // Respuesta de fallback por si algo falla
+      return NextResponse.json({ replies: ["No entendí, ¿puedes repetirlo?"] });
     }
 
-    const data = (await resp.json()) as DFDetectIntentResponse;
-    const msgs = data.queryResult?.responseMessages || [];
-    const replies: string[] = [];
-
-    for (const m of msgs) {
-      const list = m.text?.text || [];
-      for (const s of list) replies.push(s);
-    }
-
-    return NextResponse.json({ replies, raw: data });
   } catch (err) {
-    console.error("Error in /api/chat", err);
-    return NextResponse.json({ error: "Fallo en /api/chat" }, { status: 500 });
+    // Manejo de errores
+    console.error("Error in /api/chat (Dialogflow ES)", err);
+    const errorMessage = (err as Error).message;
+    return NextResponse.json({ error: `Fallo en /api/chat: ${errorMessage}` }, { status: 500 });
   }
 }
