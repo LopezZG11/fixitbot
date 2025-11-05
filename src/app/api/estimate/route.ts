@@ -5,7 +5,7 @@ import { Buffer } from "node:buffer"; // Para manejar imágenes como Buffer
 export const runtime = "nodejs";
 
 /* ===================== Tipos ===================== */
-type Severity = "bajo" | "intermedio" | "avanzado";
+type Severity = "bajo" | "intermedio" | "avanzado" | "Revisión Requerida " | string;
 
 type Box = {
   // Coordenadas NORMALIZADAS 0..1 relativas al ancho/alto de la imagen
@@ -518,11 +518,12 @@ async function callDetector(file: File): Promise<DetectorOut> {
   return r.json() as Promise<DetectorOut>;
 }
 
-function fallbackHeuristic(file: File) {
-  const size = file.size;
-  const severity: Severity = size < 800_000 ? "bajo" : size < 1_600_000 ? "intermedio" : "avanzado";
-  const category = size < 800_000 ? "scratch" : size < 1_600_000 ? "paint_damage" : "dent";
-  const area = "defensa/guardafango (estimado)";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function fallbackHeuristic(_file: File) {
+  const severity: Severity = "Revisión Requerida";
+  const category = "Análisis no concluyente";
+  const area = "Requiere inspección manual";
+
   return { severity, category, area };
 }
 

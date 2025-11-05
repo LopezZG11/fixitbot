@@ -6,7 +6,7 @@ import { track } from "@vercel/analytics";
 import * as Sentry from "@sentry/nextjs";
 
 /* =================== Tipos =================== */
-type Severity = "bajo" | "intermedio" | "avanzado" | string;
+type Severity = "bajo" | "intermedio" | "avanzado" | "Revisión Requerida " | string;
 
 type Box = {
   x: number;
