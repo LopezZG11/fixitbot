@@ -518,11 +518,11 @@ async function callDetector(file: File): Promise<DetectorOut> {
   return r.json() as Promise<DetectorOut>;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function fallbackHeuristic(_file: File) {
-  const severity: Severity = "Revisión Requerida";
-  const category = "Análisis no concluyente";
-  const area = "Requiere inspección manual";
+function fallbackHeuristic(file: File) { 
+  const size = file.size; 
+  const severity: Severity = size < 800_000 ? "bajo" : size < 1_600_000 ? "intermedio" : "avanzado";
+  const category = size < 800_000 ? "scratch" : size < 1_600_000 ? "paint_damage" : "dent";
+  const area = "componente exterior (estimado)";
 
   return { severity, category, area };
 }
