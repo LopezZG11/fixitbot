@@ -91,7 +91,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
       "Lava y seca el área.",
       "Enmascara orillas con cinta.",
       "Aplica compuesto pulidor (corte medio) en pad de espuma.",
-      "Pulir con presión ligera, 30–60 s por pasada.",
+      "Pulir con presión ligera, 30-60 s por pasada.",
       "Microfibra para retirar residuo y revisar.",
     ],
   },
@@ -140,7 +140,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
     title: "Quitar transferencia de pintura sin repintar",
     videoUrl: "http://www.youtube.com/watch?v=RWqz6LPA4yU",
     steps: [
-      "APC/citrus en la marca, 1–2 min.",
+      "APC/citrus en la marca, 1-2 min.",
       "Frota con clay bar o borrador melamínico suave.",
       "Pulido suave para recuperar brillo.",
     ],
