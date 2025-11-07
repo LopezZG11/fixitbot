@@ -1,18 +1,10 @@
 // src/app/api/detector/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Buffer } from "node:buffer";
 
 export const runtime = "nodejs";
 
-/* ===== Tipos ===== */
-type Box = {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  cls: string;
-  score?: number;
-};
+/* ========= Tipos ========= */
+type Box = { x: number; y: number; w: number; h: number; cls: string; score?: number };
 
 interface RFPrediction {
   x: number;
@@ -33,28 +25,33 @@ interface RFResponse {
   image?: RFImageMeta;
 }
 
-/* ===== Type guards ===== */
+/* ========= Type Guards ========= */
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
 function isRFPrediction(v: unknown): v is RFPrediction {
+  if (!isObject(v)) return false;
+  const x = (v as Record<string, unknown>).x;
+  const y = (v as Record<string, unknown>).y;
+  const w = (v as Record<string, unknown>).width;
+  const h = (v as Record<string, unknown>).height;
+  const cls = (v as Record<string, unknown>).class;
+  const conf = (v as Record<string, unknown>).confidence;
   return (
-    isObject(v) &&
-    typeof v.x === "number" &&
-    typeof v.y === "number" &&
-    typeof v.width === "number" &&
-    typeof v.height === "number" &&
-    typeof (v as Record<string, unknown>).class === "string" &&
-    (typeof (v as Record<string, unknown>).confidence === "number" ||
-      typeof (v as Record<string, unknown>).confidence === "undefined")
+    typeof x === "number" &&
+    typeof y === "number" &&
+    typeof w === "number" &&
+    typeof h === "number" &&
+    typeof cls === "string" &&
+    (typeof conf === "number" || typeof conf === "undefined")
   );
 }
 
 function isRFResponse(v: unknown): v is RFResponse {
   if (!isObject(v)) return false;
-  const preds = (v as Record<string, unknown>)["predictions"];
-  const img = (v as Record<string, unknown>)["image"];
+  const preds = (v as Record<string, unknown>).predictions;
+  const img = (v as Record<string, unknown>).image;
   const predsOk = Array.isArray(preds) && preds.every(isRFPrediction);
   const imgOk =
     typeof img === "undefined" ||
@@ -66,13 +63,13 @@ function isRFResponse(v: unknown): v is RFResponse {
   return predsOk && imgOk;
 }
 
-/* ===== Helpers ===== */
+/* ========= Helpers ========= */
 function clamp01(n: number) {
   return Math.max(0, Math.min(1, n));
 }
 
 function normalizeClass(cls: string) {
-  return cls.toLowerCase().replace(/\s+/g, "_");
+  return cls.toLowerCase().replace(/[\s-]+/g, "_");
 }
 
 function stripDataUriPrefix(b64: string): string {
@@ -80,19 +77,20 @@ function stripDataUriPrefix(b64: string): string {
   return i >= 0 ? b64.slice(i + "base64,".length) : b64;
 }
 
-function envVars() {
-  const MODEL = (process.env.ROBOFLOW_MODEL ?? "").trim();
-  const VERSION = (process.env.ROBOFLOW_VERSION ?? "1").trim();
-  const KEY = (process.env.ROBOFLOW_API_KEY ?? "").trim();
-  const CONF = (process.env.ROBOFLOW_CONFIDENCE ?? "0.25").trim();
-  const OVLP = (process.env.ROBOFLOW_OVERLAP ?? "0.45").trim();
-  return { MODEL, VERSION, KEY, CONF, OVLP };
+function sanitizeEnv(v: string) {
+  // Quita espacios y comillas pegadas al guardar en Vercel
+  return v.trim().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
 }
 
-/* ===== Handler ===== */
+/* ========= Handler ========= */
 export async function POST(req: NextRequest) {
   try {
-    const { MODEL, VERSION, KEY, CONF, OVLP } = envVars();
+    // Envs saneadas
+    const MODEL = sanitizeEnv(process.env.ROBOFLOW_MODEL ?? "");
+    const VERSION = sanitizeEnv(process.env.ROBOFLOW_VERSION ?? "1");
+    const KEY = sanitizeEnv(process.env.ROBOFLOW_API_KEY ?? "");
+    const CONF = sanitizeEnv(process.env.ROBOFLOW_CONFIDENCE ?? "0.25");
+    const OVLP = sanitizeEnv(process.env.ROBOFLOW_OVERLAP ?? "0.45");
 
     if (!MODEL || !KEY) {
       console.error("[detector] Falta ROBOFLOW_MODEL o ROBOFLOW_API_KEY");
@@ -101,22 +99,18 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
-
-    // Aviso común: publishable key (rf_...) no funciona en detect.roboflow.com
     if (KEY.startsWith("rf_")) {
       return NextResponse.json(
         {
           error:
-            "La clave 'rf_' es publicable y no sirve para Inference. Usa la Private API Key del Workspace.",
+            "La clave 'rf_' es publicable (client-side) y no sirve para detect.roboflow.com. Usa tu Private API Key.",
         },
         { status: 400 }
       );
     }
 
-    const url =
-      `https://detect.roboflow.com/${encodeURIComponent(MODEL)}/${encodeURIComponent(
-        VERSION
-      )}` +
+    const detectUrl =
+      `https://detect.roboflow.com/${encodeURIComponent(MODEL)}/${encodeURIComponent(VERSION)}` +
       `?api_key=${encodeURIComponent(KEY)}` +
       `&confidence=${encodeURIComponent(CONF)}` +
       `&overlap=${encodeURIComponent(OVLP)}` +
@@ -126,7 +120,7 @@ export async function POST(req: NextRequest) {
     let rfRes: Response;
 
     if (ct.includes("multipart/form-data")) {
-      // === MULTIPART: soporta "file" (recomendado) o "image_base64"
+      // === MULTIPART: aceptamos "file" (preferido) o "image_base64" ===
       const form = await req.formData();
       const file = form.get("file");
       const b64Maybe = form.get("image_base64");
@@ -135,22 +129,13 @@ export async function POST(req: NextRequest) {
         const buf = Buffer.from(await file.arrayBuffer());
         const fd = new FormData();
         fd.append("file", new Blob([buf]), file.name || "upload.jpg");
-
-        rfRes = await fetch(url, {
-          method: "POST",
-          body: fd,
-          cache: "no-store",
-          headers: { "User-Agent": "fixitbot-vercel/1.0" },
-        });
+        rfRes = await fetch(detectUrl, { method: "POST", body: fd, cache: "no-store" });
       } else if (typeof b64Maybe === "string" && b64Maybe.length > 0) {
-        const imageB64 = stripDataUriPrefix(b64Maybe);
-        rfRes = await fetch(url, {
+        const imgB64 = stripDataUriPrefix(b64Maybe);
+        rfRes = await fetch(detectUrl, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "fixitbot-vercel/1.0",
-          },
-          body: new URLSearchParams({ image: imageB64 }).toString(),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ image: imgB64 }).toString(),
           cache: "no-store",
         });
       } else {
@@ -160,7 +145,7 @@ export async function POST(req: NextRequest) {
         );
       }
     } else if (ct.includes("application/json")) {
-      // === JSON: espera { image_base64 }
+      // === JSON: { image_base64 } ===
       const bodyUnknown: unknown = await req.json();
       const b64 =
         isObject(bodyUnknown) && typeof bodyUnknown["image_base64"] === "string"
@@ -169,20 +154,16 @@ export async function POST(req: NextRequest) {
 
       if (!b64) {
         return NextResponse.json(
-          { error: "Falta image_base64 en JSON." },
+          { error: "Falta 'image_base64' en JSON." },
           { status: 400 }
         );
       }
 
-      const imageB64 = stripDataUriPrefix(b64);
-
-      rfRes = await fetch(url, {
+      const imgB64 = stripDataUriPrefix(b64);
+      rfRes = await fetch(detectUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": "fixitbot-vercel/1.0",
-        },
-        body: new URLSearchParams({ image: imageB64 }).toString(),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ image: imgB64 }).toString(),
         cache: "no-store",
       });
     } else {
@@ -197,33 +178,27 @@ export async function POST(req: NextRequest) {
 
     if (!rfRes.ok) {
       const txt = await rfRes.text().catch(() => "");
-      console.error("[detector] Roboflow error:", rfRes.status, txt);
-      // Mensaje claro para 403
-      const hint403 =
+      const hint =
         rfRes.status === 403
-          ? "Forbidden: suele ser clave privada inválida, revocada o workspace/proyecto sin permisos."
+          ? "Forbidden: Private API Key inválida (comillas/espacios), rota, o slug/versión del modelo no coincide con Roboflow."
           : undefined;
-
+      console.error("[detector] Roboflow error:", rfRes.status, txt);
       return NextResponse.json(
-        {
-          error: `Roboflow ${rfRes.status}`,
-          detail: txt.slice(0, 500),
-          hint: hint403,
-        },
+        { error: `Roboflow ${rfRes.status}`, detail: txt.slice(0, 500), hint },
         { status: 502 }
       );
     }
 
-    const raw: unknown = await rfRes.json();
-
-    if (!isRFResponse(raw)) {
-      console.error("[detector] Respuesta no válida de Roboflow:", raw);
+    const rawUnknown: unknown = await rfRes.json();
+    if (!isRFResponse(rawUnknown)) {
+      console.error("[detector] Respuesta no válida de Roboflow:", rawUnknown);
       return NextResponse.json(
         { error: "Respuesta de Roboflow no válida" },
         { status: 502 }
       );
     }
 
+    const raw = rawUnknown as RFResponse;
     const iw = raw.image?.width ?? 1;
     const ih = raw.image?.height ?? 1;
 
@@ -246,9 +221,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[detector] Crash:", msg);
-    return NextResponse.json(
-      { error: `Error en detector: ${msg}` },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: `Error en detector: ${msg}` }, { status: 500 });
   }
 }
