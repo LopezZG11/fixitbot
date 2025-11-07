@@ -86,7 +86,7 @@ const ALLOWED_CLASSES = new Set([
 const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: string[] }> = {
   scratch: {
     title: "Pulido de rayón leve (sin traspasar barniz)",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=kS47vNm5vU0",
     steps: [
       "Lava y seca el área.",
       "Enmascara orillas con cinta.",
@@ -97,7 +97,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   paint_damage: {
     title: "Retoque puntual de pintura",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=esHqdxsy_zY",
     steps: [
       "Desengrasa con isopropílico.",
       "Lija suave si hay rebabas (grano 2000).",
@@ -108,7 +108,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   dent: {
     title: "PDR casero (golpe pequeño sin romper pintura)",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=KuSVU4EcgK0",
     steps: [
       "Calienta ligeramente el panel.",
       "Coloca ventosa/tab en el centro del golpe.",
@@ -118,7 +118,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   door_ding: {
     title: "Ding de puerta con kit de ventosa",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=PlH3LHkTEuE",
     steps: [
       "Limpia y marca el centro.",
       "Pega tab pequeño con pegamento.",
@@ -128,7 +128,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   headlight_restore: {
     title: "Restauración de faro opaco",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=8_VshrMrvMU",
     steps: [
       "Enmascara el contorno.",
       "Lija progresivo 1000→2000 en húmedo.",
@@ -138,7 +138,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   paint_transfer: {
     title: "Quitar transferencia de pintura sin repintar",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=RWqz6LPA4yU",
     steps: [
       "APC/citrus en la marca, 1–2 min.",
       "Frota con clay bar o borrador melamínico suave.",
@@ -147,7 +147,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   rust_corrosion: {
     title: "Tratamiento de óxido superficial",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=Zw1Wf19OYzo",
     steps: [
       "Lija hasta metal sano.",
       "Desengrasa.",
@@ -157,7 +157,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   plastic_bumper_crack_small: {
     title: "Grieta pequeña en defensa plástica",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=9q51QBiztSw",
     steps: [
       "Bisela por detrás; desengrasa.",
       "Resina/epoxi + malla; curar.",
@@ -166,7 +166,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   clearcoat_chip: {
     title: "Astilla de barniz (chip)",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=h3dRxPyPzxA",
     steps: [
       "Limpia y desengrasa.",
       "Gota de barniz en el chip.",
@@ -175,7 +175,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
   },
   flat_tire: {
     title: "Reparación temporal de pinchazo (mecha)",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    videoUrl: "http://www.youtube.com/watch?v=cMhq0HSP1sk",
     steps: [
       "Marca y extrae el objeto.",
       "Agranda con herramienta en T.",
