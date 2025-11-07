@@ -56,18 +56,6 @@ const ALLOWED = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX = 5 * 1024 * 1024; // 5 MB
 const HARD_CLASSES = /(crack|lamp(_|\s)?broken|rust|corri?s(i|o)n|flat(_|\s)?tire|glass(_|\s)?shatter)/i;
 
-/* ---- Post-procesado anti–falsos positivos ---- */
-const MIN_SCORE = 0.60;   // sube a 0.65–0.70 si hay FPs
-const MIN_AREA  = 0.015;  // 1.5% del frame
-const ALLOWED_CLASSES = new Set<string>([
-  "dent",
-  "scratch",
-  "paint_damage",
-  "door_ding",
-  "bumper_damage",
-  "front-bumper-dent",
-]);
-
 const FRIENDLY_DIY = new Set<string>([
   "scratch",
   "paint_damage",
@@ -82,7 +70,19 @@ const FRIENDLY_DIY = new Set<string>([
   "flat_tire",
 ]);
 
-/* ============== DIY curado ============== */
+/* ---- Post-procesado anti–falsos positivos ---- */
+const MIN_SCORE = 0.60;   // súbelo si aún hay FPs (0.65–0.70)
+const MIN_AREA  = 0.015;  // 1.5% del frame; súbelo si salen cajitas muy pequeñas
+const ALLOWED_CLASSES = new Set([
+  "dent",
+  "scratch",
+  "paint_damage",
+  "door_ding",
+  "bumper_damage",
+  "front-bumper-dent"
+]);
+
+/* ============== DIY curado (puedes extenderlo libremente) ============== */
 const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: string[] }> = {
   scratch: {
     title: "Pulido de rayón leve (sin traspasar barniz)",
@@ -347,78 +347,8 @@ function pickBase64FromForm(form: FormData): string | undefined {
   return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
-/* ===================== Bypass de /api/detector en Vercel ===================== */
-function shouldBypassInternalApi(): boolean {
-  // Si estamos en Vercel y NO hay token de bypass -> ir directo a Roboflow
-  return !!process.env.VERCEL_URL && !process.env.VERCEL_PROTECTION_BYPASS;
-}
-
-interface RFPrediction {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  class: string;
-  confidence?: number;
-}
-interface RFImageMeta { width?: number; height?: number; }
-interface RFResponse { predictions: RFPrediction[]; image?: RFImageMeta; }
-
-function mapRFToBoxes(json: RFResponse): Box[] {
-  const iw = json.image?.width ?? 1;
-  const ih = json.image?.height ?? 1;
-  const preds = Array.isArray(json.predictions) ? json.predictions : [];
-  const boxes: Box[] = preds.map((p) => {
-    const x = Math.max(0, Math.min(1, (p.x - p.width / 2) / iw));
-    const y = Math.max(0, Math.min(1, (p.y - p.height / 2) / ih));
-    const w = Math.max(0, Math.min(1, p.width / iw));
-    const h = Math.max(0, Math.min(1, p.height / ih));
-    const cls = p.class.toLowerCase().replace(/\s+/g, "_");
-    const score = typeof p.confidence === "number" ? p.confidence : undefined;
-    return { x, y, w, h, cls, score };
-  });
-  return boxes;
-}
-
-async function callRoboflowDirectFromBase64(b64: string): Promise<DetectorOut> {
-  const MODEL = process.env.ROBOFLOW_MODEL ?? "";
-  const VERSION = process.env.ROBOFLOW_VERSION ?? "1";
-  const KEY = process.env.ROBOFLOW_API_KEY ?? "";
-  const CONF = process.env.ROBOFLOW_CONFIDENCE ?? "0.25";
-  const OVLP  = process.env.ROBOFLOW_OVERLAP ?? "0.45";
-
-  const url = `https://detect.roboflow.com/${MODEL}/${VERSION}` +
-              `?api_key=${encodeURIComponent(KEY)}` +
-              `&confidence=${encodeURIComponent(CONF)}` +
-              `&overlap=${encodeURIComponent(OVLP)}` +
-              `&format=json`;
-
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ image: b64 }).toString(),
-    cache: "no-store",
-  });
-
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    return { boxes: [], note: `Roboflow ${r.status}${t ? `: ${t}` : ""}` };
-  }
-  const jf = (await r.json()) as RFResponse;
-  return { boxes: mapRFToBoxes(jf) };
-}
-
-async function callRoboflowDirectFromFile(file: File): Promise<DetectorOut> {
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const b64 = buffer.toString("base64");
-  return callRoboflowDirectFromBase64(b64);
-}
-
-/* ===================== Detector calls (con bypass) ===================== */
+/* ===================== Detector calls ===================== */
 async function callDetectorFromFile(file: File): Promise<DetectorOut> {
-  if (shouldBypassInternalApi()) {
-    return callRoboflowDirectFromFile(file);
-  }
   const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
   const detApiUrl = new URL("/api/detector", baseUrl);
 
@@ -431,14 +361,10 @@ async function callDetectorFromFile(file: File): Promise<DetectorOut> {
     const t = await r.text().catch(() => "");
     return { boxes: [], note: `Error al llamar al detector: ${r.status}${t ? `: ${t}` : ""}` };
   }
-  const data = (await r.json()) as DetectorOut;
-  return data;
+  return (await r.json()) as DetectorOut;
 }
 
 async function callDetectorFromBase64(b64: string): Promise<DetectorOut> {
-  if (shouldBypassInternalApi()) {
-    return callRoboflowDirectFromBase64(b64);
-  }
   const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
   const detApiUrl = new URL("/api/detector", baseUrl);
 
@@ -452,8 +378,7 @@ async function callDetectorFromBase64(b64: string): Promise<DetectorOut> {
     const t = await r.text().catch(() => "");
     return { boxes: [], note: `Error al llamar al detector: ${r.status}${t ? `: ${t}` : ""}` };
   }
-  const data = (await r.json()) as DetectorOut;
-  return data;
+  return (await r.json()) as DetectorOut;
 }
 
 /* ===================== Heurística de fallback ===================== */
@@ -468,9 +393,9 @@ function fallbackHeuristic(file: File) {
 /* ===================== Filtro anti-FP ===================== */
 function postFilter(boxes: Box[]): Box[] {
   return boxes
-    .filter((b) => (b.score ?? 0) >= MIN_SCORE)
-    .filter((b) => (b.w * b.h) >= MIN_AREA)
-    .filter((b) => {
+    .filter(b => (b.score ?? 0) >= MIN_SCORE)
+    .filter(b => (b.w * b.h) >= MIN_AREA)
+    .filter(b => {
       const raw = (b.cls || "").toLowerCase();
       const norm = normalizeClass(raw);
       return ALLOWED_CLASSES.has(raw) || ALLOWED_CLASSES.has(norm);
@@ -479,6 +404,7 @@ function postFilter(boxes: Box[]): Box[] {
 
 /* ===================== Cálculo principal ===================== */
 function calculateEstimate(inputBoxes: Box[], fallbackFile?: File): ApiResult {
+  // Centralizamos el post-filtro aquí para TODOS los caminos
   const boxes = postFilter(inputBoxes);
 
   const pct = areaPct(boxes);
@@ -602,7 +528,7 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json(
         { error: "Faltan 'boxes' o 'image_base64' en JSON." },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -616,13 +542,13 @@ export async function POST(req: NextRequest) {
         if ((file.type && !ALLOWED.includes(file.type)) && file.size > 0) {
           return NextResponse.json(
             { error: "Formato de imagen no soportado. Usa JPG, PNG o WEBP." },
-            { status: 415 },
+            { status: 415 }
           );
         }
         if (file.size > MAX) {
           return NextResponse.json(
             { error: `Imagen demasiado grande (máximo ${MAX / (1024 * 1024)} MB).` },
-            { status: 413 },
+            { status: 413 }
           );
         }
         const det = await callDetectorFromFile(file);
@@ -644,19 +570,19 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json(
         { error: "No se subió ningun 'file'/'image' ni 'image_base64'." },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
     return NextResponse.json(
       { error: "Content-Type no soportado. Usa application/json o multipart/form-data." },
-      { status: 415 },
+      { status: 415 }
     );
   } catch (error) {
     console.error("[estimate] crash:", error);
     return NextResponse.json(
       { error: "Error de servidor interno en la API de estimación." },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
