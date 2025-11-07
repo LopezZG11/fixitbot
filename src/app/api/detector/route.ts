@@ -3,112 +3,162 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-/* ========= Tipos ========= */
+/* ===== Tipos ===== */
 type Box = { x: number; y: number; w: number; h: number; cls: string; score?: number };
-type RfPrediction = {
-  x: number; y: number; width: number; height: number;
-  class?: string; confidence?: number;
-  image_width?: number; image_height?: number;
-};
-type RfResponse = { image?: { width?: number; height?: number }; predictions?: RfPrediction[] };
 
-/* ========= Utils ========= */
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-const stripDataUrlPrefix = (b64: string) => {
+interface RFPrediction {
+  x: number; y: number; width: number; height: number;
+  class: string; confidence?: number;
+}
+interface RFImageMeta { width?: number; height?: number; }
+interface RFResponse { predictions: RFPrediction[]; image?: RFImageMeta; }
+
+/* ===== Type guards ===== */
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+function isRFPrediction(v: unknown): v is RFPrediction {
+  return (
+    isObject(v) &&
+    typeof v.x === "number" && typeof v.y === "number" &&
+    typeof v.width === "number" && typeof v.height === "number" &&
+    typeof (v as Record<string, unknown>).class === "string" &&
+    (typeof (v as Record<string, unknown>).confidence === "number" ||
+      typeof (v as Record<string, unknown>).confidence === "undefined")
+  );
+}
+function isRFResponse(v: unknown): v is RFResponse {
+  if (!isObject(v)) return false;
+  const preds = (v as Record<string, unknown>)["predictions"];
+  const img = (v as Record<string, unknown>)["image"];
+  const predsOk = Array.isArray(preds) && preds.every(isRFPrediction);
+  const imgOk =
+    typeof img === "undefined" ||
+    (isObject(img) &&
+      (typeof (img as Record<string, unknown>).width === "number" ||
+        typeof (img as Record<string, unknown>).width === "undefined") &&
+      (typeof (img as Record<string, unknown>).height === "number" ||
+        typeof (img as Record<string, unknown>).height === "undefined"));
+  return predsOk && imgOk;
+}
+
+/* ===== Helpers ===== */
+function clamp01(n: number) { return Math.max(0, Math.min(1, n)); }
+function normalizeClass(cls: string) { return cls.toLowerCase().replace(/\s+/g, "_"); }
+function stripDataUriPrefix(b64: string): string {
   const i = b64.indexOf("base64,");
   return i >= 0 ? b64.slice(i + "base64,".length) : b64;
-};
+}
 
-/* ========= Handler ========= */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => null) as { image_base64?: string } | null;
-    const raw = body?.image_base64 ? stripDataUrlPrefix(body.image_base64) : undefined;
-    if (!raw) {
+    // TRIM envs para evitar 405 por espacios
+    const MODEL   = (process.env.ROBOFLOW_MODEL ?? "").trim();
+    const VERSION = (process.env.ROBOFLOW_VERSION ?? "1").trim();
+    const KEY     = (process.env.ROBOFLOW_API_KEY ?? "").trim();
+    const CONF    = (process.env.ROBOFLOW_CONFIDENCE ?? "0.25").trim();
+    const OVLP    = (process.env.ROBOFLOW_OVERLAP ?? "0.45").trim();
+
+    if (!MODEL || !KEY) {
+      console.error("[detector] Falta ROBOFLOW_MODEL o ROBOFLOW_API_KEY");
+      return NextResponse.json({ error: "Faltan variables de entorno de Roboflow." }, { status: 500 });
+    }
+
+    const url =
+      `https://detect.roboflow.com/${encodeURIComponent(MODEL)}/${encodeURIComponent(VERSION)}` +
+      `?api_key=${encodeURIComponent(KEY)}` +
+      `&confidence=${encodeURIComponent(CONF)}` +
+      `&overlap=${encodeURIComponent(OVLP)}` +
+      `&format=json`;
+
+    const ct = req.headers.get("content-type") || "";
+
+    let rfRes: Response;
+
+    if (ct.includes("multipart/form-data")) {
+      // === Rama MULTIPART: reenvía como multipart con "file" ===
+      const form = await req.formData();
+      const file = form.get("file");
+      const b64Maybe = form.get("image_base64");
+
+      if (file instanceof File) {
+        // reenviar exactamente como "file" (igual que tu curl que funcionó)
+        const buf = Buffer.from(await file.arrayBuffer());
+        const fd = new FormData();
+        // filename opcional pero útil
+        fd.append("file", new Blob([buf]), (file as File).name || "upload.jpg");
+
+        rfRes = await fetch(url, { method: "POST", body: fd, cache: "no-store" });
+      } else if (typeof b64Maybe === "string" && b64Maybe.length > 0) {
+        // soporta también image_base64 dentro de multipart
+        const imageB64 = stripDataUriPrefix(b64Maybe);
+        rfRes = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ image: imageB64 }).toString(),
+          cache: "no-store",
+        });
+      } else {
+        return NextResponse.json(
+          { error: "No se encontró 'file' ni 'image_base64' en multipart." },
+          { status: 400 }
+        );
+      }
+    } else if (ct.includes("application/json")) {
+      // === Rama JSON: espera { image_base64 } ===
+      const body: unknown = await req.json();
+      const b64 = isObject(body) ? (body["image_base64"] as unknown) : undefined;
+      if (typeof b64 !== "string" || b64.length === 0) {
+        return NextResponse.json({ error: "Falta image_base64 en JSON." }, { status: 400 });
+      }
+      const imageB64 = stripDataUriPrefix(b64);
+
+      rfRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ image: imageB64 }).toString(),
+        cache: "no-store",
+      });
+    } else {
       return NextResponse.json(
-        { ok: false, message: "Falta image_base64", hint: "Puede ir con o sin prefijo data:image/...;base64," },
-        { status: 400 }
+        { error: "Content-Type no soportado. Usa multipart/form-data (file) o application/json (image_base64)." },
+        { status: 415 }
       );
     }
 
-    // Mock opcional para pruebas sin Roboflow
-    if (process.env.MOCK_DETECTOR === "1") {
-      const boxes: Box[] = [{ x: 0.32, y: 0.28, w: 0.36, h: 0.34, cls: "dent", score: 0.7 }];
-      return NextResponse.json({ boxes, note: "MOCK_DETECTOR=1" });
-    }
-
-    const MODEL   = process.env.ROBOFLOW_MODEL;
-    const VERSION = process.env.ROBOFLOW_VERSION;
-    const KEY     = process.env.ROBOFLOW_API_KEY;
-    if (!MODEL || !VERSION || !KEY) {
-      return NextResponse.json({ error: "Faltan ROBOFLOW_MODEL / ROBOFLOW_VERSION / ROBOFLOW_API_KEY" }, { status: 500 });
-    }
-
-    const GATEWAY    = (process.env.ROBOFLOW_GATEWAY ?? "serverless").toLowerCase();
-    const CONF       = process.env.ROBOFLOW_CONFIDENCE ?? "0.45";
-    const OVERLAP    = process.env.ROBOFLOW_OVERLAP ?? "0.45";
-
-    // Construye URL según gateway elegido
-    const base =
-      GATEWAY === "detect"
-        ? "https://detect.roboflow.com"
-        : "https://serverless.roboflow.com"; // default
-
-    const url =
-      `${base}/${encodeURIComponent(MODEL)}/${encodeURIComponent(VERSION)}` +
-      `?api_key=${encodeURIComponent(KEY)}&format=json&confidence=${encodeURIComponent(CONF)}&overlap=${encodeURIComponent(OVERLAP)}`;
-
-    // Hosted API acepta el base64 crudo en el body con este content-type
-    const rf = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: raw,
-      cache: "no-store",
-    });
-
-    if (!rf.ok) {
-      const t = await rf.text().catch(() => "");
+    if (!rfRes.ok) {
+      const txt = await rfRes.text().catch(() => "");
+      console.error("[detector] Roboflow error:", rfRes.status, txt);
       return NextResponse.json(
-        { boxes: [] as Box[], note: `Roboflow ${rf.status}${t ? `: ${t}` : ""}` },
+        { error: `Roboflow ${rfRes.status}`, detail: txt.slice(0, 500) },
         { status: 502 }
       );
     }
 
-    const data = (await rf.json()) as RfResponse;
+    const raw: unknown = await rfRes.json();
+    if (!isRFResponse(raw)) {
+      console.error("[detector] Respuesta no válida de Roboflow:", raw);
+      return NextResponse.json({ error: "Respuesta de Roboflow no válida" }, { status: 502 });
+    }
 
-    // Dimensiones: usa image.width/height o, si no vienen, toma de la primera predicción
-    const W = data.image?.width  ?? data.predictions?.[0]?.image_width  ?? 1000;
-    const H = data.image?.height ?? data.predictions?.[0]?.image_height ?? 1000;
+    const iw = raw.image?.width ?? 1;
+    const ih = raw.image?.height ?? 1;
 
-    const boxes: Box[] = (data.predictions ?? []).map((p): Box => {
-      const x1 = (p.x - p.width  / 2) / W;
-      const y1 = (p.y - p.height / 2) / H;
-      const w  =  p.width  / W;
-      const h  =  p.height / H;
+    const boxes: Box[] = raw.predictions.map((p) => {
+      const x = (p.x - p.width / 2) / iw;
+      const y = (p.y - p.height / 2) / ih;
+      const w = p.width / iw;
+      const h = p.height / ih;
       return {
-        x: clamp01(x1),
-        y: clamp01(y1),
-        w: clamp01(w),
-        h: clamp01(h),
-        cls: String(p.class ?? "damage"),
-        score: typeof p.confidence === "number" ? p.confidence : undefined,
+        x: clamp01(x), y: clamp01(y), w: clamp01(w), h: clamp01(h),
+        cls: normalizeClass(p.class), score: p.confidence,
       };
     });
 
-    return NextResponse.json({ boxes });
-  } catch {
-    return NextResponse.json({ error: "Error en detector" }, { status: 500 });
+    return NextResponse.json({ boxes }, { status: 200 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[detector] Crash:", msg);
+    return NextResponse.json({ error: `Error en detector: ${msg}` }, { status: 500 });
   }
-}
-
-// GET de ayuda (si abres /api/detector en el navegador)
-export function GET() {
-  return NextResponse.json(
-    {
-      ok: false,
-      message: "Usa POST con JSON: { image_base64: <base64> }",
-      hint: "image_base64 puede ser con o sin prefijo data:image/...;base64,",
-    },
-    { status: 405 }
-  );
 }
