@@ -1,10 +1,11 @@
 // src/app/api/detector/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { Buffer } from "node:buffer";
 
 export const runtime = "nodejs";
 
 /* ========= Tipos ========= */
-type Box = { x: number; y: number; w: number; h: number; cls: string; score?: number };
+type Box = { x: number; y: number; w: number; h: number; cls: string; score?: number; area?: number };
 
 interface RFPrediction {
   x: number;
@@ -13,16 +14,17 @@ interface RFPrediction {
   height: number;
   class: string;
   confidence?: number;
+  area_pct?: number;
 }
-
 interface RFImageMeta {
   width?: number;
   height?: number;
 }
-
 interface RFResponse {
   predictions: RFPrediction[];
   image?: RFImageMeta;
+  weak_signal?: boolean;
+  weak_top?: Array<{ cls: string; confidence: number }>;
 }
 
 /* ========= Type Guards ========= */
@@ -64,9 +66,7 @@ function isRFResponse(v: unknown): v is RFResponse {
 }
 
 /* ========= Helpers ========= */
-function clamp01(n: number) {
-  return Math.max(0, Math.min(1, n));
-}
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
 function normalizeClass(cls: string) {
   return cls.toLowerCase().replace(/[\s-]+/g, "_");
@@ -78,46 +78,22 @@ function stripDataUriPrefix(b64: string): string {
 }
 
 function sanitizeEnv(v: string) {
-  // Quita espacios y comillas pegadas al guardar en Vercel
   return v.trim().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
 }
 
 /* ========= Handler ========= */
 export async function POST(req: NextRequest) {
   try {
-    // Envs saneadas
-    const MODEL = sanitizeEnv(process.env.ROBOFLOW_MODEL ?? "");
-    const VERSION = sanitizeEnv(process.env.ROBOFLOW_VERSION ?? "1");
-    const KEY = sanitizeEnv(process.env.ROBOFLOW_API_KEY ?? "");
-    const CONF = sanitizeEnv(process.env.ROBOFLOW_CONFIDENCE ?? "0.25");
-    const OVLP = sanitizeEnv(process.env.ROBOFLOW_OVERLAP ?? "0.45");
-
-    if (!MODEL || !KEY) {
-      console.error("[detector] Falta ROBOFLOW_MODEL o ROBOFLOW_API_KEY");
+    const DETECTOR_URL = sanitizeEnv(process.env.DAMAGE_DETECTOR_URL ?? "");
+    if (!DETECTOR_URL) {
       return NextResponse.json(
-        { error: "Faltan variables de entorno de Roboflow." },
+        { error: "Falta DAMAGE_DETECTOR_URL en .env.local (ej: http://127.0.0.1:8001/predict)" },
         { status: 500 }
       );
     }
-    if (KEY.startsWith("rf_")) {
-      return NextResponse.json(
-        {
-          error:
-            "La clave 'rf_' es publicable (client-side) y no sirve para detect.roboflow.com. Usa tu Private API Key.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const detectUrl =
-      `https://detect.roboflow.com/${encodeURIComponent(MODEL)}/${encodeURIComponent(VERSION)}` +
-      `?api_key=${encodeURIComponent(KEY)}` +
-      `&confidence=${encodeURIComponent(CONF)}` +
-      `&overlap=${encodeURIComponent(OVLP)}` +
-      `&format=json`;
 
     const ct = req.headers.get("content-type") || "";
-    let rfRes: Response;
+    let svcRes: Response;
 
     if (ct.includes("multipart/form-data")) {
       // === MULTIPART: aceptamos "file" (preferido) o "image_base64" ===
@@ -129,15 +105,13 @@ export async function POST(req: NextRequest) {
         const buf = Buffer.from(await file.arrayBuffer());
         const fd = new FormData();
         fd.append("file", new Blob([buf]), file.name || "upload.jpg");
-        rfRes = await fetch(detectUrl, { method: "POST", body: fd, cache: "no-store" });
+        svcRes = await fetch(DETECTOR_URL, { method: "POST", body: fd, cache: "no-store" });
       } else if (typeof b64Maybe === "string" && b64Maybe.length > 0) {
         const imgB64 = stripDataUriPrefix(b64Maybe);
-        rfRes = await fetch(detectUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ image: imgB64 }).toString(),
-          cache: "no-store",
-        });
+        const buf = Buffer.from(imgB64, "base64");
+        const fd = new FormData();
+        fd.append("file", new Blob([buf]), "upload.jpg");
+        svcRes = await fetch(DETECTOR_URL, { method: "POST", body: fd, cache: "no-store" });
       } else {
         return NextResponse.json(
           { error: "No se encontró 'file' ni 'image_base64' en multipart." },
@@ -153,49 +127,35 @@ export async function POST(req: NextRequest) {
           : "";
 
       if (!b64) {
-        return NextResponse.json(
-          { error: "Falta 'image_base64' en JSON." },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Falta 'image_base64' en JSON." }, { status: 400 });
       }
 
       const imgB64 = stripDataUriPrefix(b64);
-      rfRes = await fetch(detectUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ image: imgB64 }).toString(),
-        cache: "no-store",
-      });
+      const buf = Buffer.from(imgB64, "base64");
+      const fd = new FormData();
+      fd.append("file", new Blob([buf]), "upload.jpg");
+
+      svcRes = await fetch(DETECTOR_URL, { method: "POST", body: fd, cache: "no-store" });
     } else {
       return NextResponse.json(
         {
-          error:
-            "Content-Type no soportado. Usa multipart/form-data (file) o application/json (image_base64).",
+          error: "Content-Type no soportado. Usa multipart/form-data (file) o application/json (image_base64).",
         },
         { status: 415 }
       );
     }
 
-    if (!rfRes.ok) {
-      const txt = await rfRes.text().catch(() => "");
-      const hint =
-        rfRes.status === 403
-          ? "Forbidden: Private API Key inválida (comillas/espacios), rota, o slug/versión del modelo no coincide con Roboflow."
-          : undefined;
-      console.error("[detector] Roboflow error:", rfRes.status, txt);
+    if (!svcRes.ok) {
+      const txt = await svcRes.text().catch(() => "");
       return NextResponse.json(
-        { error: `Roboflow ${rfRes.status}`, detail: txt.slice(0, 500), hint },
+        { error: `Detector service ${svcRes.status}`, detail: txt.slice(0, 500) },
         { status: 502 }
       );
     }
 
-    const rawUnknown: unknown = await rfRes.json();
+    const rawUnknown: unknown = await svcRes.json();
     if (!isRFResponse(rawUnknown)) {
-      console.error("[detector] Respuesta no válida de Roboflow:", rawUnknown);
-      return NextResponse.json(
-        { error: "Respuesta de Roboflow no válida" },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "Respuesta del servicio IA no válida" }, { status: 502 });
     }
 
     const raw = rawUnknown as RFResponse;
@@ -214,13 +174,15 @@ export async function POST(req: NextRequest) {
         h: clamp01(h),
         cls: normalizeClass(p.class),
         score: p.confidence,
+        area: typeof p.area_pct === "number" ? clamp01(p.area_pct) : undefined,
       };
     });
 
-    return NextResponse.json({ boxes }, { status: 200 });
+    return NextResponse.json({ boxes,
+    weak_signal: raw.weak_signal ?? false,
+    weak_top: raw.weak_top ?? [], }, { status: 200 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[detector] Crash:", msg);
     return NextResponse.json({ error: `Error en detector: ${msg}` }, { status: 500 });
   }
 }

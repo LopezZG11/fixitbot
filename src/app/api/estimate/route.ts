@@ -14,12 +14,15 @@ type Box = {
   h: number; // 0..1
   cls: string;
   score?: number; // 0..1
+  area?: number;  // 0..1 (área real normalizada por máscara si viene del detector)
 };
 
 type DetectorOut = {
   boxes?: Box[];
   area?: string;
   note?: string;
+  weak_signal?: boolean;
+  weak_top?: Array<{ cls: string; confidence: number }>;
 };
 
 type DetailedBreakdownItem = {
@@ -54,7 +57,10 @@ type ApiResult = {
 /* ===================== Constantes ===================== */
 const ALLOWED = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX = 5 * 1024 * 1024; // 5 MB
-const HARD_CLASSES = /(crack|lamp(_|\s)?broken|rust|corri?s(i|o)n|flat(_|\s)?tire|glass(_|\s)?shatter)/i;
+
+// Clases “duras” => avanzado sí o sí (por seguridad)
+const HARD_CLASSES =
+  /(crack|lamp(_|\s)?broken|rust|corri?s(i|o)n|flat(_|\s)?tire|glass(_|\s)?shatter)/i;
 
 const FRIENDLY_DIY = new Set<string>([
   "scratch",
@@ -71,15 +77,45 @@ const FRIENDLY_DIY = new Set<string>([
 ]);
 
 /* ---- Post-procesado anti–falsos positivos ---- */
-const MIN_SCORE = 0.60;   // súbelo si aún hay FPs (0.65–0.70)
-const MIN_AREA  = 0.015;  // 1.5% del frame; súbelo si salen cajitas muy pequeñas
+const MIN_SCORE = 0.30;
+const MIN_AREA = 0.002;
+
+// Umbrales por clase (recorta falsos “lamp_broken” y similares)
+const MIN_SCORE_BY_CLASS: Record<string, number> = {
+  lamp_broken: 0.90,
+  glass_shatter: 0.85,
+  flat_tire: 0.80,
+  crack: 0.70,
+  dent: 0.40,
+  scratch: 0.30,
+  paint_damage: 0.35,
+  door_ding: 0.35,
+  bumper_damage: 0.35,
+};
+
+const MIN_AREA_BY_CLASS: Record<string, number> = {
+  lamp_broken: 0.010,
+  glass_shatter: 0.010,
+  flat_tire: 0.010,
+  crack: 0.002,
+  dent: 0.002,
+  scratch: 0.001,
+  paint_damage: 0.001,
+  door_ding: 0.001,
+  bumper_damage: 0.001,
+};
+
 const ALLOWED_CLASSES = new Set([
-  "dent",
   "scratch",
+  "dent",
+  "crack",
+  "lamp_broken",
+  "glass_shatter",
+  "flat_tire",
   "paint_damage",
   "door_ding",
   "bumper_damage",
-  "front-bumper-dent"
+  "front_bumper_dent",
 ]);
 
 /* ============== DIY curado (puedes extenderlo libremente) ============== */
@@ -91,7 +127,7 @@ const DIY_LIBRARY: Record<string, { title: string; videoUrl: string; steps: stri
       "Lava y seca el área.",
       "Enmascara orillas con cinta.",
       "Aplica compuesto pulidor (corte medio) en pad de espuma.",
-      "Pulir con presión ligera, 30–60 s por pasada.",
+      "Pulir con presión ligera, 30-60 s por pasada.",
       "Microfibra para retirar residuo y revisar.",
     ],
   },
@@ -213,14 +249,41 @@ function mapToDIYKey(raw: string): string {
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-const sumArea = (boxes: Box[]) => boxes.reduce((s, b) => s + b.w * b.h, 0);
+
+const minScoreFor = (b: Box) => {
+  const k = normalizeClass(b.cls);
+  return MIN_SCORE_BY_CLASS[k] ?? MIN_SCORE;
+};
+
+const minAreaFor = (b: Box) => {
+  const k = normalizeClass(b.cls);
+  return MIN_AREA_BY_CLASS[k] ?? MIN_AREA;
+};
+
+/**
+ * Área efectiva que usa TODO el motor de estimación.
+ * - Si viene b.area (máscara), se usa directo.
+ * - Si NO viene, usamos bbox (w*h) pero con corrección por clase (scratch/crack).
+ */
+const boxArea = (b: Box) => {
+  if (typeof b.area === "number") return clamp01(b.area);
+
+  // fallback si SOLO tienes bbox
+  const base = b.w * b.h;
+  const cls = normalizeClass(b.cls);
+  if (cls === "scratch") return base * 0.15;
+  if (cls === "crack") return base * 0.35;
+  return base;
+};
+
+const sumArea = (boxes: Box[]) => boxes.reduce((s, b) => s + boxArea(b), 0);
 const areaPct = (boxes: Box[]) => Math.min(1, sumArea(boxes));
 
 function classByArea(boxes: Box[]): string {
   const acc = new Map<string, number>();
   for (const b of boxes) {
     const cls = normalizeClass(b.cls);
-    acc.set(cls, (acc.get(cls) ?? 0) + b.w * b.h);
+    acc.set(cls, (acc.get(cls) ?? 0) + boxArea(b));
   }
   let best = "scratch";
   let bestA = 0;
@@ -228,15 +291,40 @@ function classByArea(boxes: Box[]): string {
   return best;
 }
 
+/**
+ * Severidad por clase:
+ * - Hard classes => avanzado
+ * - Scratch / paint_damage => umbrales más altos (para no “asustar” por área de máscara)
+ * - Dent/door_ding/bumper_damage => umbrales intermedios
+ */
 function inferSeverityFrom(boxes: Box[]): Severity {
+  const hasHard = boxes.some(b => HARD_CLASSES.test(normalizeClass(b.cls)));
+  if (hasHard) return "avanzado";
+
+  const main = normalizeClass(classByArea(boxes));
+
+  // scoreArea = suma ponderada por confianza
   const scoreArea = boxes.reduce((s, b) => {
     const conf = typeof b.score === "number" ? clamp01(b.score) : 0.5;
-    return s + (0.5 + 0.5 * conf) * (b.w * b.h);
+    return s + (0.5 + 0.5 * conf) * boxArea(b);
   }, 0);
-  const hasHard = boxes.some(b => HARD_CLASSES.test(b.cls));
-  if (hasHard && scoreArea > 0.03) return "avanzado";
-  if (scoreArea < 0.02) return "bajo";
-  if (scoreArea < 0.06) return "intermedio";
+
+  // Umbrales por clase (ajústalos con 10-20 fotos reales si quieres)
+  if (main === "scratch" || main === "paint_damage") {
+    if (scoreArea < 0.02) return "bajo";
+    if (scoreArea < 0.10) return "intermedio";
+    return "avanzado";
+  }
+
+  if (main === "dent" || main === "door_ding" || main === "bumper_damage") {
+    if (scoreArea < 0.01) return "bajo";
+    if (scoreArea < 0.05) return "intermedio";
+    return "avanzado";
+  }
+
+  // default conservador
+  if (scoreArea < 0.008) return "bajo";
+  if (scoreArea < 0.03) return "intermedio";
   return "avanzado";
 }
 
@@ -309,9 +397,18 @@ const areaK = (pct: number) => 1 + Math.min(pct, 0.25) * 1.5;
 
 /* ===================== DIY/Taller helpers ===================== */
 function pickDIY(category: string, sev: Severity, area = 0) {
-  const allowIntermedioSmall = sev === "intermedio" && area <= 0.03;
-  if (!(sev === "bajo" || allowIntermedioSmall)) return undefined;
   const key = mapToDIYKey(category);
+
+  // Para scratches/paint_damage permitimos DIY con intermedio más “grande”
+  const allowIntermedio =
+    sev === "intermedio" &&
+    (
+      (key === "scratch" || key === "paint_damage" || key === "paint_transfer" || key === "bumper_scuff")
+        ? area <= 0.10
+        : area <= 0.03
+    );
+
+  if (!(sev === "bajo" || allowIntermedio)) return undefined;
   if (!FRIENDLY_DIY.has(key)) return undefined;
   const item = DIY_LIBRARY[key];
   return item?.videoUrl?.startsWith("http") ? item : undefined;
@@ -321,15 +418,25 @@ function topClasses(boxes: Box[]) {
   const acc = new Map<string, number>();
   for (const b of boxes) {
     const cls = normalizeClass(b.cls);
-    const w = b.w * b.h * (typeof b.score === "number" ? 0.5 + 0.5 * clamp01(b.score) : 0.5);
+    const w = boxArea(b) * (typeof b.score === "number" ? 0.5 + 0.5 * clamp01(b.score) : 0.5);
     acc.set(cls, (acc.get(cls) ?? 0) + w);
   }
   return [...acc.entries()].sort((a, b) => b[1] - a[1]).map(([cls, weight]) => ({ cls, weight }));
 }
 
 function shouldRecommendWorkshop(sev: Severity, pct: number, boxes: Box[]) {
-  const hasHard = boxes.some(b => HARD_CLASSES.test(b.cls));
-  return sev === "avanzado" || pct > 0.08 || hasHard;
+  const hasHard = boxes.some(b => HARD_CLASSES.test(normalizeClass(b.cls)));
+  const main = normalizeClass(classByArea(boxes));
+
+  if (hasHard) return true;
+  if (sev === "avanzado") return true;
+
+  // Para scratch/paint_damage no mandes al taller tan fácil
+  if (main === "scratch" || main === "paint_damage") {
+    return pct > 0.15;
+  }
+
+  return pct > 0.08;
 }
 
 /* ===================== Herramientas de formulario ===================== */
@@ -393,8 +500,8 @@ function fallbackHeuristic(file: File) {
 /* ===================== Filtro anti-FP ===================== */
 function postFilter(boxes: Box[]): Box[] {
   return boxes
-    .filter(b => (b.score ?? 0) >= MIN_SCORE)
-    .filter(b => (b.w * b.h) >= MIN_AREA)
+    .filter(b => (b.score ?? 0) >= minScoreFor(b))
+    .filter(b => boxArea(b) >= minAreaFor(b))
     .filter(b => {
       const raw = (b.cls || "").toLowerCase();
       const norm = normalizeClass(raw);
@@ -403,9 +510,73 @@ function postFilter(boxes: Box[]): Box[] {
 }
 
 /* ===================== Cálculo principal ===================== */
-function calculateEstimate(inputBoxes: Box[], fallbackFile?: File): ApiResult {
-  // Centralizamos el post-filtro aquí para TODOS los caminos
+function calculateEstimate(
+  inputBoxes: Box[],
+  fallbackFile?: File,
+  opts?: {
+    weakSignal?: boolean;
+    weakTop?: Array<{ cls: string; confidence: number }>;
+    detectorNote?: string;
+  }
+): ApiResult {
   const boxes = postFilter(inputBoxes);
+
+  const weakSignal = !!opts?.weakSignal;
+  const weakTop = opts?.weakTop ?? [];
+  const detectorNote = opts?.detectorNote ?? "";
+  const detectorError = detectorNote.toLowerCase().includes("error al llamar al detector") ||
+                        detectorNote.toLowerCase().includes("detector service") ||
+                        detectorNote.toLowerCase().includes("502") ||
+                        detectorNote.toLowerCase().includes("500");
+
+  if (boxes.length === 0) {
+    if (detectorError) {
+      return {
+        severity: "bajo",
+        category: "error_detector",
+        area: "zona no identificada",
+        estimate: 0,
+        boxes: [],
+        areaPct: 0,
+        note: detectorNote || "El servicio de IA no está disponible. Intenta de nuevo.",
+        breakdown: { base: 0, sevFactor: 1, areaFactor: 1, areaPct: 0, zone: "default" },
+        detailedBreakdown: [{ part: "zona no identificada", base: 0, zone: "default" }],
+        insights: { topClasses: [], recommendWorkshop: false },
+      };
+    }
+
+    if (weakSignal) {
+      const hint = weakTop.length
+        ? `Señal débil: ${weakTop.map(x => `${x.cls}(${(x.confidence * 100).toFixed(0)}%)`).join(", ")}`
+        : "Se detectó una señal débil pero no suficiente para clasificar.";
+      return {
+        severity: "bajo",
+        category: "no_concluyente",
+        area: "zona no identificada",
+        estimate: 0,
+        boxes: [],
+        areaPct: 0,
+        note: `${hint} Toma otra foto más cerca, con buena luz y enfocada al daño.`,
+        breakdown: { base: 0, sevFactor: 1, areaFactor: 1, areaPct: 0, zone: "default" },
+        detailedBreakdown: [{ part: "zona no identificada", base: 0, zone: "default" }],
+        insights: { topClasses: [], recommendWorkshop: false },
+      };
+    }
+
+    // Aquí decides si es "sin_danio" o también "no_concluyente"
+    return {
+      severity: "bajo",
+      category: "sin_danio",
+      area: "zona no identificada",
+      estimate: 0,
+      boxes: [],
+      areaPct: 0,
+      note: "No se detectó daño en la imagen.",
+      breakdown: { base: 0, sevFactor: 1, areaFactor: 1, areaPct: 0, zone: "default" },
+      detailedBreakdown: [{ part: "zona no identificada", base: 0, zone: "default" }],
+      insights: { topClasses: [], recommendWorkshop: false },
+    };
+  }
 
   const pct = areaPct(boxes);
   const hasDetections = boxes.length > 0;
@@ -455,9 +626,16 @@ function calculateEstimate(inputBoxes: Box[], fallbackFile?: File): ApiResult {
     identifiedZones.add(normalizedZone);
   }
 
-  // Reemplazo si hay daño muy grande y severo
+  // Reemplazo si hay daño muy grande y severo (PROTEGIDO)
   const REPLACEMENT_THRESHOLD = 0.10;
-  const isReplacementNeeded = severity === "avanzado" && pct > REPLACEMENT_THRESHOLD;
+  const mainCat = normalizeClass(category);
+
+  const isReplacementNeeded =
+    severity === "avanzado" &&
+    pct > REPLACEMENT_THRESHOLD &&
+    mainCat !== "scratch" &&
+    mainCat !== "paint_damage";
+
   let customNote: string | undefined;
 
   if (isReplacementNeeded) {
@@ -486,7 +664,7 @@ function calculateEstimate(inputBoxes: Box[], fallbackFile?: File): ApiResult {
     area: finalAreaDescription,
     estimate,
     diy,
-    boxes,               // ya filtradas
+    boxes,
     areaPct: pct,
     note: customNote,
     breakdown: {
@@ -511,32 +689,44 @@ export async function POST(req: NextRequest) {
   try {
     const contentType = req.headers.get("content-type") || "";
 
-    // Recalcular con boxes (JSON) o llamar detector con image_base64
+    // ---------- JSON ----------
     if (contentType.includes("application/json")) {
-      const body = (await req.json()) as { boxes?: Box[]; note?: string; image_base64?: string };
+      const body = (await req.json()) as {
+        boxes?: Box[];
+        note?: string;
+        image_base64?: string;
+      };
+
+      // 1) Ya vienen boxes (no hay detector)
       if (Array.isArray(body.boxes) && body.boxes.length > 0) {
         const result = calculateEstimate(body.boxes);
         if (body.note) result.note = result.note ? `${result.note} | ${body.note}` : body.note;
         return NextResponse.json(result);
       }
+
+      // 2) image_base64 -> llama detector
       if (typeof body.image_base64 === "string" && body.image_base64.length > 0) {
         const det = await callDetectorFromBase64(body.image_base64);
-        const result = calculateEstimate(det.boxes ?? []);
-        const finalNote = [result.note, det.note].filter(Boolean).join(" | ");
+
+        const result = calculateEstimate(det.boxes ?? [], undefined, {
+          weakSignal: det.weak_signal,
+          weakTop: det.weak_top,
+          detectorNote: det.note,
+        });
+
+        const finalNote = [result.note, det.note, body.note].filter(Boolean).join(" | ");
         result.note = finalNote || undefined;
+
         return NextResponse.json(result);
       }
-      return NextResponse.json(
-        { error: "Faltan 'boxes' o 'image_base64' en JSON." },
-        { status: 400 }
-      );
+
+      return NextResponse.json({ error: "Faltan 'boxes' o 'image_base64' en JSON." }, { status: 400 });
     }
 
-    // Subida por formulario (multipart)
+    // ---------- MULTIPART ----------
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
-
-      // 1) archivo
+      // 1) file
       const file = pickFileFromForm(form);
       if (file) {
         if ((file.type && !ALLOWED.includes(file.type)) && file.size > 0) {
@@ -551,18 +741,29 @@ export async function POST(req: NextRequest) {
             { status: 413 }
           );
         }
+
         const det = await callDetectorFromFile(file);
-        const result = calculateEstimate(det.boxes ?? [], file);
+        const result = calculateEstimate(det.boxes ?? [], file, {
+          weakSignal: det.weak_signal,
+          weakTop: det.weak_top,
+          detectorNote: det.note,
+        });
+
         const finalNote = [result.note, det.note].filter(Boolean).join(" | ");
         result.note = finalNote || undefined;
         return NextResponse.json(result);
       }
 
-      // 2) base64 en formulario
+      // 2) image_base64 (multipart)
       const b64 = pickBase64FromForm(form);
       if (typeof b64 === "string") {
         const det = await callDetectorFromBase64(b64);
-        const result = calculateEstimate(det.boxes ?? []);
+        const result = calculateEstimate(det.boxes ?? [], undefined, {
+          weakSignal: det.weak_signal,
+          weakTop: det.weak_top,
+          detectorNote: det.note,
+        });
+
         const finalNote = [result.note, det.note].filter(Boolean).join(" | ");
         result.note = finalNote || undefined;
         return NextResponse.json(result);
@@ -573,7 +774,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
+    // ---------- Unsupported ----------
     return NextResponse.json(
       { error: "Content-Type no soportado. Usa application/json o multipart/form-data." },
       { status: 415 }

@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python / fastapi
+ai_service/.venv/
+ai_service/__pycache__/
+ai_service/**/*.pyc
+ai_service/.python-version
+
+# model weights (si los tienes ahí)
+ai_service/weights/
+ai_service/**/*.pt
+
+# misc
+results.csv
