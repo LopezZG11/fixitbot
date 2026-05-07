@@ -5,9 +5,41 @@ import numpy as np
 import io
 from threading import Lock
 
+# ===================== (AGREGADO) Auto-descarga del modelo =====================
+import os
+import urllib.request
+from pathlib import Path
+
+WEIGHTS_DIR = Path("weights")
+WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+
+MODEL_PATH = WEIGHTS_DIR / "yolov11-seg-cardd.pt"
+MODEL_URL = os.getenv("MODEL_URL", "").strip()
+
+def ensure_model():
+    # Si el archivo existe, no hacemos nada
+    if MODEL_PATH.exists():
+        return
+
+    # Si no existe y no hay URL, fallamos con mensaje claro
+    if not MODEL_URL:
+        raise RuntimeError(
+            "No existe weights/yolov11-seg-cardd.pt y falta la variable de entorno MODEL_URL "
+            "(URL pública del .pt para descargarlo)."
+        )
+
+    print(f"[boot] Descargando modelo desde: {MODEL_URL}")
+    urllib.request.urlretrieve(MODEL_URL, str(MODEL_PATH))
+    print(f"[boot] Modelo guardado en: {MODEL_PATH}")
+# ===============================================================================
+
 app = FastAPI()
 
 MODEL_LOCK = Lock()
+
+# ===================== (AGREGADO) Asegurar modelo antes de cargar YOLO =========
+ensure_model()
+# ===============================================================================
 
 model = YOLO("weights/yolov11-seg-cardd.pt")
 CLASSES = ["crack", "dent", "glass shatter", "lamp broken", "scratch", "tire flat"]
