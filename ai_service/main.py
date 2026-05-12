@@ -17,19 +17,35 @@ MODEL_PATH = WEIGHTS_DIR / "yolov11-seg-cardd.pt"
 MODEL_URL = os.getenv("MODEL_URL", "").strip()
 
 def ensure_model():
-    # Si el archivo existe, no hacemos nada
     if MODEL_PATH.exists():
         return
-
-    # Si no existe y no hay URL, fallamos con mensaje claro
     if not MODEL_URL:
         raise RuntimeError(
-            "No existe weights/yolov11-seg-cardd.pt y falta la variable de entorno MODEL_URL "
-            "(URL pública del .pt para descargarlo)."
+            "No existe weights/yolov11-seg-cardd.pt y falta MODEL_URL (URL pública del .pt)."
         )
 
     print(f"[boot] Descargando modelo desde: {MODEL_URL}")
-    urllib.request.urlretrieve(MODEL_URL, str(MODEL_PATH))
+
+    # --- (CLAVE) Simular navegador para evitar 403 de Cloudflare ---
+    req = urllib.request.Request(
+        MODEL_URL,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/123.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+        },
+        method="GET",
+    )
+
+    with urllib.request.urlopen(req, timeout=120) as r, open(MODEL_PATH, "wb") as f:
+        # descarga por chunks para archivos grandes
+        while True:
+            chunk = r.read(1024 * 1024)  # 1 MB
+            if not chunk:
+                break
+            f.write(chunk)
+
     print(f"[boot] Modelo guardado en: {MODEL_PATH}")
 # ===============================================================================
 
