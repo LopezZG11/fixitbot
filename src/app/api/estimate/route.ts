@@ -455,9 +455,40 @@ function pickBase64FromForm(form: FormData): string | undefined {
 }
 
 /* ===================== Detector calls ===================== */
-async function callDetectorFromFile(file: File): Promise<DetectorOut> {
-  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
-  const detApiUrl = new URL("/api/detector", baseUrl);
+// async function callDetectorFromFile(file: File): Promise<DetectorOut> {
+//   const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
+//   const detApiUrl = new URL("/api/detector", baseUrl);
+
+//   const buf = Buffer.from(await file.arrayBuffer());
+//   const fd = new FormData();
+//   fd.append("file", new Blob([buf]), file.name || "upload.jpg");
+
+//   const r = await fetch(detApiUrl, { method: "POST", body: fd, cache: "no-store" });
+//   if (!r.ok) {
+//     const t = await r.text().catch(() => "");
+//     return { boxes: [], note: `Error al llamar al detector: ${r.status}${t ? `: ${t}` : ""}` };
+//   }
+//   return (await r.json()) as DetectorOut;
+// }
+
+// async function callDetectorFromBase64(b64: string): Promise<DetectorOut> {
+//   const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
+//   const detApiUrl = new URL("/api/detector", baseUrl);
+
+//   const r = await fetch(detApiUrl, {
+//     method: "POST",
+//     headers: { "Content-Type": "application/json" },
+//     body: JSON.stringify({ image_base64: b64 }),
+//     cache: "no-store",
+//   });
+//   if (!r.ok) {
+//     const t = await r.text().catch(() => "");
+//     return { boxes: [], note: `Error al llamar al detector: ${r.status}${t ? `: ${t}` : ""}` };
+//   }
+//   return (await r.json()) as DetectorOut;
+// }
+async function callDetectorFromFile(file: File, origin: string): Promise<DetectorOut> {
+  const detApiUrl = new URL("/api/detector", origin);
 
   const buf = Buffer.from(await file.arrayBuffer());
   const fd = new FormData();
@@ -471,9 +502,8 @@ async function callDetectorFromFile(file: File): Promise<DetectorOut> {
   return (await r.json()) as DetectorOut;
 }
 
-async function callDetectorFromBase64(b64: string): Promise<DetectorOut> {
-  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
-  const detApiUrl = new URL("/api/detector", baseUrl);
+async function callDetectorFromBase64(b64: string, origin: string): Promise<DetectorOut> {
+  const detApiUrl = new URL("/api/detector", origin);
 
   const r = await fetch(detApiUrl, {
     method: "POST",
@@ -685,10 +715,13 @@ function calculateEstimate(
 }
 
 /* ===================== Handler ===================== */
+// export async function POST(req: NextRequest) {
+//   try {
+//     const contentType = req.headers.get("content-type") || "";
 export async function POST(req: NextRequest) {
   try {
+    const origin = req.nextUrl.origin;
     const contentType = req.headers.get("content-type") || "";
-
     // ---------- JSON ----------
     if (contentType.includes("application/json")) {
       const body = (await req.json()) as {
@@ -706,7 +739,8 @@ export async function POST(req: NextRequest) {
 
       // 2) image_base64 -> llama detector
       if (typeof body.image_base64 === "string" && body.image_base64.length > 0) {
-        const det = await callDetectorFromBase64(body.image_base64);
+        // const det = await callDetectorFromBase64(body.image_base64);
+        const det = await callDetectorFromBase64(body.image_base64, origin);
 
         const result = calculateEstimate(det.boxes ?? [], undefined, {
           weakSignal: det.weak_signal,
@@ -742,7 +776,8 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        const det = await callDetectorFromFile(file);
+        // const det = await callDetectorFromFile(file);
+        const det = await callDetectorFromFile(file, origin);
         const result = calculateEstimate(det.boxes ?? [], file, {
           weakSignal: det.weak_signal,
           weakTop: det.weak_top,
@@ -757,7 +792,8 @@ export async function POST(req: NextRequest) {
       // 2) image_base64 (multipart)
       const b64 = pickBase64FromForm(form);
       if (typeof b64 === "string") {
-        const det = await callDetectorFromBase64(b64);
+        // const det = await callDetectorFromBase64(b64);
+        const det = await callDetectorFromBase64(b64, origin);
         const result = calculateEstimate(det.boxes ?? [], undefined, {
           weakSignal: det.weak_signal,
           weakTop: det.weak_top,
